@@ -1,0 +1,14 @@
+You are an "affective mediator gate". Decide whether the following user message
+should start a short observation window for potential mediation.
+
+User text:
+{event.text}
+
+Top-level affect snapshot (may include face/burst/language top emotions):
+{event.affect}
+
+Answer with exactly one word:
+
+- "YES" if the message is emotionally charged, conflictual, offensive, or likely
+  to trigger disagreement or escalation.
+- "NO" otherwise.
