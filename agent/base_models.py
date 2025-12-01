@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
-from typing import Dict, Iterable, List, Literal, Mapping, Optional, Set
+from typing import Dict, Iterable, List, Literal, Mapping, Optional, Set, Tuple
 
 from agent.constants import (
     HUME_EMOTIONS_LIST_TEXT,
@@ -139,6 +139,14 @@ class EmotionAnnotation(BaseModel):
 class AffectiveEvent(BaseModel):
     """
     Output from an emotion recognition model, per modality, with associated payload.
+
+    For messages, the assumed structure of payload:
+    {
+        "content": str
+        "session_id": str
+    }
+
+
     """
 
     event_id: str = Field(description="unique identifier of the event")
@@ -150,13 +158,31 @@ class AffectiveEvent(BaseModel):
 
     emotion_activations: Optional[List[EmotionAnnotation]] = Field(
         default=[],  # should generally be populated, but optional in case Hume API fails
-        min_length=len(HUME_EMOTIONS_LIST_VISION_AUDIO),
+        min_length=len(HUME_EMOTIONS_LIST_VISION_AUDIO),  # consider removing due to buggy behavior
         max_length=len(HUME_EMOTIONS_LIST_TEXT),
         description="Array of all emotions with corresponding activations",
     )
 
     payload: Dict = Field(description="associated raw data", default={})
 
+
+    def to_human_message(self) -> HumanMessage:
+        """Converts the affective event into an LLM compatible human message"""
+
+            
+        participant = self.participant_id
+        
+        structured_content = f'''
+        User {participant} sent: {self.payload.get("content")}
+        '''
+
+        return HumanMessage(
+            content=structured_content,
+            additional_kwargs={
+                'participant_id': participant,
+                'timestamp': self.timestamp,
+            }
+        )
 
     @staticmethod
     def create_from_raw(raw: dict) -> "AffectiveEvent":
@@ -208,27 +234,33 @@ class AffectiveState(BaseModel):
 
     dominant_emotion_threshold: float = 0.6
     
-    def update(self, event: AffectiveEvent) -> None:
+    def update(self, event: AffectiveEvent) -> Tuple[bool, str]:
         """
         Updates the affective state of a participant given a new affective event, in place
+
+        Returns the status of the update with error message if failed.
         """
+
+        new_activations = sorted(event.emotion_activations, key=lambda emotion: emotion.name)
 
         # Update emotion activations of modality
         if not self.running_states.get(event.modality):
-            self.running_states[event.modality] = event.emotion_activations
+            self.running_states[event.modality] = new_activations
         else:
             try:
                 self.running_states[event.modality] = [
                     self._update_running_emotion(curr, new)
                     for curr, new
-                    in zip(self.running_states[event.modality], event.emotion_activations)
+                    in zip(self.running_states[event.modality], new_activations)
                 ]
-            except:
-                print(f"current state : {self.running_states[event.modality]}\n\n new state : {event.emotion_activations}")
+            except Exception as e:
+                return (False, f"Could not update state with new event, reason {e}")
+
         # extract the dominant emotions 
         self._update_dominant_emotions()
 
         self.last_update = event.timestamp
+        return (True, "")
 
     def _update_dominant_emotions(self):
         self.dominant_emotions = list(
@@ -336,7 +368,7 @@ class AffectiveWindow(BaseModel):
         """Add a new message to the window."""
 
         if event.modality == "text":
-            new_message = create_human_message_from_raw(raw_message=event.payload)
+            new_message = event.to_human_message()
             self.all_messages.append(new_message)
         self.last_update = event.timestamp
 

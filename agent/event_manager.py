@@ -153,12 +153,18 @@ class EventManager:
         """
         # TODO: handle AI message from mediator
 
+        self.logger.info(str(ev))
+
         try:
             event = AffectiveEvent.create_from_raw(ev)  # validate input
         except Exception as e:
-            self.logger.error(f"Could not create an AffectiveEvent from {ev}, error: {e}")
+            self.logger.error(f"Could not parse event {ev}, error: {e}. skipping.")
+            return
+        
+        if event.emotion_activations == []:
+            self.logger.warn(f"Event {event.event_id} from session {session_id} did not have any annotations")
 
-        # 1. update affective state of the participant generating the event
+
         self.logger.info(f"Updating affective state of participant: {event.participant_id}")
         self._update_affective_state_of_participant(session_id=session_id, event=event)
 
@@ -171,7 +177,7 @@ class EventManager:
             if not window.is_expired():
                 # active window exists, add event and move on to next event
                 window.add_event(event=event)
-                self.logger.info(f"Active window exists (id: {window.window_id}), added {event}.")
+                # self.logger.info(f"Active window exists (id: {window.window_id}), added {event}.")
                 return
             
             else:
@@ -213,19 +219,19 @@ class EventManager:
                 "affective_sperm": self.affective_states[f"{session_id}/{event.participant_id}"],
                 "meta": conversation_meta
             }
-            # self.logger.info(affective_package)
             
             _ = await self.mediator.run(affective_package, pathway="is_interesting")
             # now let's check the state of the graph
             next_step = self.mediator.graph.get_state(config={'configurable': {'thread_id': session_id}}).next
             if next_step == ():
                 # not interesting, break
+                self.logger.info("decided not interesting!")
                 return
             
              # TODO: instead of in-memory move to redis
             self.windows[session_id] = AffectiveWindow.create(
                 discussion_id=session_id,
-                first_message=create_human_message_from_raw(event.payload),
+                first_message=event.to_human_message(),
                 affective_states=[state for state in self.affective_states.values()],
             )
           
@@ -252,66 +258,18 @@ class EventManager:
                 }
             )
             self.affective_states[f"{session_id}/{event.participant_id}"] = affective_state
-        affective_state.update(event)
+        
+        if event.emotion_activations != []:
+            success, reason = affective_state.update(event)
+            if not success:
+                self.logger.error(reason)
 
-        self.logger.info(
-            f"Updated affective state of participant {event.participant_id}. "
-            f"Dominant emotions: {affective_state.dominant_emotions}."
-        )
+            else:
+                self.logger.info(
+                    f"Updated affective state of participant {event.participant_id}. "
+                    f"Dominant emotions: {affective_state.dominant_emotions}."
+                )
 
-        affective_state_row = affective_state.model_dump()
-        affective_state_row['last_update'] = datetime_to_string(affective_state_row['last_update'])
-        db.reference(f"{self.study_id}/states/{session_id}/affect/{event.participant_id}").set(affective_state_row)
-
-
-    async def _evaluate_and_maybe_intervene(self, window: AffectiveWindow):
-        """Called once when a window closes."""
-        session_id = window.session_id
-        self.logger.info(
-            "Evaluating affective window for session %s with %d events",
-            session_id,
-            len(window.events),
-        )
-
-        context = {
-            "session_id": session_id,
-            "events": [
-                {
-                    "msg_id": e.msg_id,
-                    "sender_id": e.sender_id,
-                    "text": e.text,
-                    "ts": e.ts,
-                    "affect": e.affect,
-                }
-                for e in window.events
-            ],
-        }
-
-        need, reply_text = await self.mediator.decide_and_maybe_generate(context)
-
-        if need and reply_text:
-            msg_id = str(uuid.uuid4())
-            now_ms = int(time.time() * 1000)
-            mediator_msg = {
-                "id": msg_id,
-                "type": "mediator",
-                "senderId": "mediator",
-                "content": reply_text,
-                "ts": now_ms,
-            }
-            db.reference(
-                f"{self.study_id}/states/{session_id}/chat/messages/{msg_id}"
-            ).set(mediator_msg)
-
-            self.logger.info(
-                "Mediator intervention written to session %s as message %s",
-                session_id,
-                msg_id,
-            )
-
-            # Cooldown
-            window.cooldown_until = time.time() + self.cooldown_seconds
-
-        # Drop the window state
-        self.windows.pop(session_id, None)
-        self.logger.info("Closed affective window for session %s", session_id)
+            affective_state_row = affective_state.model_dump()
+            affective_state_row['last_update'] = datetime_to_string(affective_state_row['last_update'])
+            db.reference(f"{self.study_id}/states/{session_id}/affect/{event.participant_id}").set(affective_state_row)

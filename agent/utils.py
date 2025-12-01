@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime
 from pydantic import BaseModel
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 
 def create_human_message_from_raw(raw_message: dict) -> HumanMessage:
@@ -32,7 +32,6 @@ def create_human_message_from_raw(raw_message: dict) -> HumanMessage:
     return HumanMessage(
         content=structured_content,
         additional_kwargs={
-            'message_id': raw_message['id'],
             'participant_id': participant,
             'timestamp': timestamp,
         }

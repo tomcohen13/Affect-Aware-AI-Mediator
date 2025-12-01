@@ -16,9 +16,9 @@ from langgraph.graph.state import END, START
 import logging
 
 from agent.base_models import AffectiveWindow, IsInterestingDecision, ShouldInterveneDecision
-from agent.constants import AFFECTIVE_WINDOW_DEFAULT_LIFESPAN, NO_AFFECTIVE_WINDOW_RECEIVED_TOKEN
+from agent.constants import NO_AFFECTIVE_WINDOW_RECEIVED_TOKEN
 from agent.state import GroupDiscussionState
-from agent.utils import create_human_message_from_raw, load_prompt
+from agent.utils import load_prompt
 from agent.llms import call_model_async, gating_model, reasoning_model
 
 
@@ -96,13 +96,11 @@ class AffectiveMediator:
         if pathway == "is_interesting":
 
             config = {'configurable': {'thread_id': input['discussion_id']}}
-
-            self.logger.info(config)
             
             # check if the discussion has a state
             current_state = self.graph.get_state(config=config)
 
-            state = {"messages": [create_human_message_from_raw(input["event"].payload)]}
+            state = {"messages": [input["event"].to_human_message()]}
 
             if current_state.values == {}:
                 # no previous state found for the conversation
@@ -112,8 +110,9 @@ class AffectiveMediator:
 
             async for val in self.graph.astream(state, config=config, stream_mode="values"):
                 # TODO: log this somewhere?
-                if self.logger:
-                    self.logger.info(val)
+                # if self.logger:
+                #     self.logger.info(val)
+                pass
 
             return val
 
