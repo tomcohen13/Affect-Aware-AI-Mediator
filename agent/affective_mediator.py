@@ -41,7 +41,7 @@ class AffectiveMediator:
     def __init__(self, memory = None, logger = None, debug_mode: bool = False):
 
         self.fast_model: BaseChatModel = gating_model
-        self.reasoning_model: BaseChatModel = gating_model  # TODO: change to reasoning_model for production
+        self.reasoning_model: BaseChatModel = reasoning_model  # TODO: change to reasoning_model for production
         self.logger: logging.Logger = logger
 
         self.is_interesting_prompt = load_prompt(func=self.is_interesting.__name__)
@@ -223,8 +223,10 @@ class AffectiveMediator:
 
         group_state_report = window.to_model_context()
 
+        prompt_with_topic = self.should_intervene_prompt.format(topic_prompt=state['topic'])
+
         messages = [
-            SystemMessage(content=self.should_intervene_prompt), 
+            SystemMessage(content=prompt_with_topic), 
             *window.all_messages,
             group_state_report,
         ]
