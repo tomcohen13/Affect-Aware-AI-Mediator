@@ -414,7 +414,10 @@ class AffectiveWindow(BaseModel):
         return {"last_affective_window": self}
     
     def to_model_context(self) -> SystemMessage:
-
+        """
+        Creates a textual report of the group's affective state from all the data,
+        and returns it a system message ready for agent ingestion.
+        """
         group_state = self.aggregate_affective_states()
 
         top_group_emotions: List[EmotionAnnotation] = sorted(group_state.max_group_activations, key = lambda e: e.activation, reverse=True)[:5]

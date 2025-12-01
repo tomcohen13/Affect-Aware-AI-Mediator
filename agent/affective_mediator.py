@@ -16,7 +16,10 @@ from langgraph.graph.state import END, START
 import logging
 
 from agent.base_models import AffectiveWindow, IsInterestingDecision, ShouldInterveneDecision
-from agent.constants import NO_AFFECTIVE_WINDOW_RECEIVED_TOKEN
+from agent.constants import (
+    NO_AFFECTIVE_WINDOW_RECEIVED_TOKEN,
+    TOPIC_OPTIONS
+)
 from agent.state import GroupDiscussionState
 from agent.utils import load_prompt
 from agent.llms import call_model_async, gating_model, reasoning_model
@@ -105,7 +108,12 @@ class AffectiveMediator:
             if current_state.values == {}:
                 # no previous state found for the conversation
                 state["discussion_id"] = input["discussion_id"]
-                state["topic"] = input['meta'].get('topicId'),  # TODO: convert topic id to topic description!
+                topic_id = input['meta'].get('topicId', "")
+                if topic_id != "" and topic_id in TOPIC_OPTIONS:
+                    state["topic"] = TOPIC_OPTIONS[topic_id].get("prompt")
+                else:
+                    state["topic"] = topic_id
+                    
                 state["condition"] = input['meta'].get('condition')
 
             async for val in self.graph.astream(state, config=config, stream_mode="values"):
@@ -213,11 +221,13 @@ class AffectiveMediator:
         # fetch affective window
         window = state['last_affective_window']
 
-        new_messages = window.all_messages
-
         group_state_report = window.to_model_context()
 
-        messages = [SystemMessage(content=self.should_intervene_prompt)] + new_messages + [group_state_report]
+        messages = [
+            SystemMessage(content=self.should_intervene_prompt), 
+            *window.all_messages,
+            group_state_report,
+        ]
 
         decision: ShouldInterveneDecision = await call_model_async(
             messages=messages,
