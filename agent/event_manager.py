@@ -37,7 +37,7 @@ from agent.constants import (
     HUME_EMOTIONS_LIST_TEXT,
     HUME_EMOTIONS_LIST_VISION_AUDIO,
 )
-from agent.utils import create_human_message_from_raw, datetime_to_string
+from agent.utils import datetime_to_string
 
 class EventManager:
     """
