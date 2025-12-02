@@ -46,6 +46,7 @@ class AffectiveMediator:
 
         self.is_interesting_prompt = load_prompt(func=self.is_interesting.__name__)
         self.should_intervene_prompt = load_prompt(func=self.should_intervene.__name__)
+        self.initial_response_prompt = load_prompt("initial_response")
 
         self.memory = MemorySaver() if memory is None else memory
         
@@ -68,7 +69,7 @@ class AffectiveMediator:
         self.debug_mode = debug_mode
 
     # TODO: refine signature and add docstring
-    async def run(self, input: dict | AffectiveWindow, pathway: Literal['is_interesting', 'should_intervene']):
+    async def run(self, input: dict | AffectiveWindow, pathway: Literal['is_interesting', 'should_intervene', 'initial_response']):
         '''
 
         Two pathways:
@@ -95,26 +96,49 @@ class AffectiveMediator:
             if pathway=should_intervene --> ShouldInterveneDecision 
         '''
 
-        
-        if pathway == "is_interesting":
+        if pathway == "initial_response":
 
             config = {'configurable': {'thread_id': input['discussion_id']}}
-            
-            # check if the discussion has a state
-            current_state = self.graph.get_state(config=config)
 
+            meta = input['meta']
+            initial_responses = {k: v['text'] for k, v in input['initial_responses'].items()}
+
+            topic_id = meta.get('topicId', "")
+            if topic_id != "" and topic_id in TOPIC_OPTIONS:
+                topic = " ".join([TOPIC_OPTIONS[topic_id].get("label"), TOPIC_OPTIONS[topic_id].get("prompt")])
+            else:
+                topic = topic_id
+
+            initial_state = {
+                "discussion_id": input["discussion_id"],
+                "initial_responses": initial_responses,
+                "topic": topic,
+                "condition": meta.get("condition"),
+                "messages": [],
+            }
+
+            _ = await self.graph.aupdate_state(config, values=initial_state, )
+
+            initial_responses_msgs = [
+                HumanMessage(f"Participant {k} wrote: {v}")
+                for k, v in initial_responses.items()
+            ]
+
+            response = await self.fast_model.ainvoke(
+                input=[
+                    SystemMessage(self.initial_response_prompt.format(topic_prompt=topic)), 
+                    *initial_responses_msgs,
+                ]
+            )
+
+            return response.content
+
+
+        elif pathway == "is_interesting":
+
+            config = {'configurable': {'thread_id': input['discussion_id']}}
+ 
             state = {"messages": [input["event"].to_human_message()]}
-
-            if current_state.values == {}:
-                # no previous state found for the conversation
-                state["discussion_id"] = input["discussion_id"]
-                topic_id = input['meta'].get('topicId', "")
-                if topic_id != "" and topic_id in TOPIC_OPTIONS:
-                    state["topic"] = ": ".join([TOPIC_OPTIONS[topic_id].get("label"), TOPIC_OPTIONS[topic_id].get("prompt")])
-                else:
-                    state["topic"] = topic_id
-                    
-                state["condition"] = input['meta'].get('condition')
 
             async for val in self.graph.astream(state, config=config, stream_mode="values"):
                 # TODO: log this somewhere?
@@ -170,6 +194,10 @@ class AffectiveMediator:
         """
         Determine if the current affective event is interesting enough to start an affective window.
         """
+
+        if not state.get('messages') or len(state['messages']) == 0:
+            return "nah"
+
         messages = [
             SystemMessage(content=self.is_interesting_prompt),
             HumanMessage(content=state['messages'][-1].content),  # last message in the discussion

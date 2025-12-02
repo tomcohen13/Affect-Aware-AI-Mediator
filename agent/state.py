@@ -1,7 +1,7 @@
 """Execution graph states for the affective mediator agent."""
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 from langchain.agents import AgentState
 from pydantic import Field
 
@@ -28,6 +28,8 @@ class GroupDiscussionState(AgentState):
     # participants: List[str] = Field(default_factory=list, description="List of participant IDs in the discussion")
     
     # messages: inherited from AgentState
+
+    initial_responses: Dict[str, str] = Field("Participants initial responses")
 
     chat_summary: str = Field(default="", description="Running summary of chat so far")
 

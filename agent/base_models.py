@@ -232,7 +232,7 @@ class AffectiveState(BaseModel):
         description="Dominant emotions extracted from all running states"
     )
 
-    dominant_emotion_threshold: float = 0.6
+    dominant_emotion_threshold: float = 0.55
     
     def update(self, event: AffectiveEvent) -> Tuple[bool, str]:
         """

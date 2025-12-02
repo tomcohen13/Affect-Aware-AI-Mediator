@@ -34,6 +34,7 @@ from agent.base_models import (
     EmotionAnnotation,
 )
 from agent.constants import (
+    CONVERSATION_STARTED_TOKEN,
     HUME_EMOTIONS_LIST_TEXT,
     HUME_EMOTIONS_LIST_VISION_AUDIO,
 )
@@ -143,22 +144,54 @@ class EventManager:
           "modality": "text" | "vision" | "audio",
           "emotion_activations": [...],
           "payload": {
-            raw sensory input. For example, a message would have the following attributes:
             content: str
-            ts: unix timestamp
-            senderId: str
+            session_id: str
             }
         }
         """
-        # TODO: handle AI message from mediator
 
-        self.logger.info(str(ev))
+        if ev.get("text", "") == CONVERSATION_STARTED_TOKEN:
+            # synthesize initial message from initial responses and send in chat
+            self.logger.info(f"Conversation started! session id: {session_id}")
+
+            session_data = db.reference(f"{self.study_id}/states/{session_id}/").get()
+            metadata = session_data.get('meta')
+            initial_responses = session_data.get('initial_responses')
+
+            input = {
+                "discussion_id": session_id,
+                "meta": metadata,
+                "initial_responses": initial_responses,
+            }
+
+            response: str = await self.mediator.run(input, pathway="initial_response")
+
+            # create new message in chat
+            new_message = {
+                "id": str(uuid.uuid4()),
+                "content": response,
+                "type": "mediator",
+                "senderId": "__mediator__",
+                "ts": int(datetime.now(timezone.utc).timestamp()),
+            }
+
+            db.reference(
+                f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}"
+            ).set(new_message)
+
+            return 
+            
 
         try:
             event = AffectiveEvent.create_from_raw(ev)  # validate input
         except Exception as e:
             self.logger.error(f"Could not parse event {ev}, error: {e}. skipping.")
             return
+        
+        self.logger.info(
+            f"[NEW EVENT] {event.timestamp} | Participant: {event.participant_id} | " 
+            f"modality: {event.modality} | payload {event.payload} "
+        )
         
         if event.emotion_activations == []:
             self.logger.warn(f"Event {event.event_id} from session {session_id} did not have any annotations")
@@ -207,16 +240,11 @@ class EventManager:
 
         if event.modality == "text":
             # No active window
-
-            conversation_meta = db.reference(f"{self.study_id}/states/{session_id}/meta").get()
-            if conversation_meta is None: 
-                conversation_meta = {}
             
             affective_package = {  # ooops too much?
                 "discussion_id": session_id,
                 "event": event,
                 "affective_sperm": self.affective_states[f"{session_id}/{event.participant_id}"],
-                "meta": conversation_meta
             }
             
             _ = await self.mediator.run(affective_package, pathway="is_interesting")
@@ -272,3 +300,4 @@ class EventManager:
             affective_state_row = affective_state.model_dump()
             affective_state_row['last_update'] = datetime_to_string(affective_state_row['last_update'])
             db.reference(f"{self.study_id}/states/{session_id}/affect/{event.participant_id}").set(affective_state_row)
+            self.logger.info(f"Wrote new affective state of {event.participant_id} into --> {self.study_id}/states/{session_id}/affect/{event.participant_id}")
