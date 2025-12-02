@@ -115,7 +115,7 @@ async def health_check():
 @app.get("/agent-docs", response_class=HTMLResponse)
 async def agent_docs():
     """Display the agent context and flow documentation."""
-    md_file_path = os.path.join(os.path.dirname(__file__), "AGENT_CONTEXT_AND_FLOW.md")
+    md_file_path = os.path.join(os.path.dirname(__file__), "README.md")
     
     try:
         with open(md_file_path, "r", encoding="utf-8") as f:
