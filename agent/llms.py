@@ -29,7 +29,7 @@ reasoning_model = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1", # OpenRouter base URL
     api_key=os.getenv("OPENROUTER_API_KEY"), # OpenRouter API key from environment variable
     model=REASONING_MODEL_NAME,
-    temperature=0.5,
+    temperature=0.7,
     max_retries=2,
     timeout=8,
 )

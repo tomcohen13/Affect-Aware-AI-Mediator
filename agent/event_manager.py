@@ -54,13 +54,9 @@ class EventManager:
         mediator: AffectiveMediator,
         database_url: str,
         service_account_str: str,
-        window_seconds: int = 30,
-        cooldown_seconds: int = 60,
     ):
         self.study_id = study_id
         self.mediator = mediator
-        self.window_seconds = window_seconds
-        self.cooldown_seconds = cooldown_seconds
 
         self.logger = logging.getLogger("EventManager")
         self.logger.setLevel(logging.INFO)
@@ -149,7 +145,6 @@ class EventManager:
             }
         }
         """
-
         if ev.get("text", "") == CONVERSATION_STARTED_TOKEN:
             # synthesize initial message from initial responses and send in chat
             self.logger.info(f"Conversation started! session id: {session_id}")
@@ -217,9 +212,26 @@ class EventManager:
                 window = window.model_copy()
                 del self.windows[session_id]
                 
-                response = await self.mediator.run(window, pathway="should_intervene")
-
-                decision = response['last_intervention_decision']
+                last_update = await self.mediator.run(window, pathway="should_intervene")
+                path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{str(uuid.uuid4())}"
+                if "intervene" in last_update:
+                    db.reference(path).set(
+                        {
+                            'trigger': last_update['intervene']['last_affective_window'].first_message.content,
+                            'last_intervention_decision': last_update['intervene']['last_intervention_decision'].model_dump(),
+                            'last_intervention_time': last_update['intervene']['last_intervention_time'].isoformat(),
+                        }
+                    )
+                    # returns the 'intervene' node
+                    decision = last_update['intervene']['last_intervention_decision']
+                else:
+                    # should_intervene node (i.e., decided against)
+                    decision = last_update['should_intervene']['last_intervention_decision']
+                    db.reference(path).set(
+                        {
+                            'last_intervention_decision': last_update['should_intervene']['last_intervention_decision'].model_dump(),
+                        }
+                    )
 
                 if decision.should_intervene:
                     
@@ -255,13 +267,13 @@ class EventManager:
                 self.logger.info("decided not interesting!")
                 return
             
-             # TODO: instead of in-memory move to redis
+            # TODO: instead of in-memory move to redis
             self.windows[session_id] = AffectiveWindow.create(
                 discussion_id=session_id,
                 first_message=event.to_human_message(),
                 affective_states=[state for state in self.affective_states.values()],
             )
-          
+
             self.logger.info("Opened affective window for session: %s, (event %s)")
             return
 

@@ -47,6 +47,7 @@ class AffectiveMediator:
         self.is_interesting_prompt = load_prompt(func=self.is_interesting.__name__)
         self.should_intervene_prompt = load_prompt(func=self.should_intervene.__name__)
         self.initial_response_prompt = load_prompt("initial_response")
+        self.post_intervention_cooldown = 45  # seconds in between two interventions
 
         self.memory = MemorySaver() if memory is None else memory
         
@@ -115,6 +116,7 @@ class AffectiveMediator:
                 "topic": topic,
                 "condition": meta.get("condition"),
                 "messages": [],
+                "post_intervention_cooldown": self.post_intervention_cooldown
             }
 
             _ = await self.graph.aupdate_state(config, values=initial_state, )
@@ -140,13 +142,8 @@ class AffectiveMediator:
  
             state = {"messages": [input["event"].to_human_message()]}
 
-            async for val in self.graph.astream(state, config=config, stream_mode="values"):
-                # TODO: log this somewhere?
-                # if self.logger:
-                #     self.logger.info(val)
-                pass
-
-            return val
+            _ = await self.graph.ainvoke(state, config=config)
+            return
 
         elif pathway == "should_intervene":
             '''
@@ -166,9 +163,9 @@ class AffectiveMediator:
             
             _ = await self.graph.aupdate_state(config=config, values=new_values, as_node="affective_window")
 
-            final_state = await self.graph.ainvoke(None, config=config)
-
-            return final_state
+            async for update in self.graph.astream(None, config=config, stream_mode="updates"):
+                self.logger.info(update)
+            return update
 
 
     def initialize_workflow(self) -> StateGraph:
@@ -226,7 +223,6 @@ class AffectiveMediator:
         Determine if an intervention is needed in the current affective window.
         """
         # enforce cooldown period between interventions
-
         if state.get('last_intervention_time') and (datetime.now() - state['last_intervention_time']).total_seconds() < state['post_intervention_cooldown']:
 
             decision = ShouldInterveneDecision(
@@ -264,10 +260,17 @@ class AffectiveMediator:
             model=self.reasoning_model,
             output_type=ShouldInterveneDecision,
         )
-        return {
-            "messages": messages,
-            "last_intervention_decision": decision,
-        }
+        if decision.should_intervene:
+            return {
+                "messages": messages,
+                "last_intervention_decision": decision,
+                "last_intervention_time": datetime.now()
+            }
+        else:
+            return {
+                "messages": messages,
+                "last_intervention_decision": decision,
+            }
     
     async def evaluate_intervention_decision(self, state: GroupDiscussionState) -> str:
         """Evaluate decision from previous state"""

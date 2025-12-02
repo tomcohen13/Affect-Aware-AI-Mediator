@@ -47,6 +47,7 @@ If intervening, generate an `intervention_message` using one of these frameworks
 - Tone: Warm and curious for Strategies 1-3; Firm and clear for Strategy 4.
 - Safety: If a user expresses self-harm or violence, `should_intervene` is true with a crisis resource message.
 - Length: Keep interventions under 2 sentences to avoid disrupting the flow.
+- Feel free to be creative in your responses and make it engaging and fun!
 
 # Output Format
 You must output a single valid JSON object exactly matching the following schema:
