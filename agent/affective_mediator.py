@@ -110,7 +110,7 @@ class AffectiveMediator:
                 state["discussion_id"] = input["discussion_id"]
                 topic_id = input['meta'].get('topicId', "")
                 if topic_id != "" and topic_id in TOPIC_OPTIONS:
-                    state["topic"] = TOPIC_OPTIONS[topic_id].get("prompt")
+                    state["topic"] = ": ".join([TOPIC_OPTIONS[topic_id].get("label"), TOPIC_OPTIONS[topic_id].get("prompt")])
                 else:
                     state["topic"] = topic_id
                     

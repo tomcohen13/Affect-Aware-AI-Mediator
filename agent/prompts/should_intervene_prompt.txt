@@ -55,8 +55,8 @@ If intervening, generate an `intervention_message` using one of these frameworks
 # Output Format
 You must output a single valid JSON object exactly matching the following schema:
 
-{
+{{
   "should_intervene": boolean, // Whether an intervention is needed or not
   "intervention_message": "string", // The intervention message to be sent, if applicable (empty string if false)
   "reason": "string" // Optional reason why an intervention is needed
-}
+}}
