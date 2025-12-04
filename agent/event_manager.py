@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 import sys
@@ -34,6 +34,7 @@ from agent.base_models import (
     EmotionAnnotation,
 )
 from agent.constants import (
+    AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
     CONVERSATION_STARTED_TOKEN,
     HUME_EMOTIONS_LIST_TEXT,
     HUME_EMOTIONS_LIST_VISION_AUDIO,
@@ -204,6 +205,10 @@ class EventManager:
             if not window.is_expired():
                 # active window exists, add event and move on to next event
                 window.add_event(event=event)
+
+                # expand window slightly if messages are coming in
+                if event.modality == "text":
+                    window.expiration_time += timedelta(seconds=2)
                 # self.logger.info(f"Active window exists (id: {window.window_id}), added {event}.")
                 return
             
@@ -213,7 +218,7 @@ class EventManager:
                 del self.windows[session_id]
                 
                 last_update = await self.mediator.run(window, pathway="should_intervene")
-                path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{str(uuid.uuid4())}"
+                path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{str(datetime.now().timestamp())}"
                 if "intervene" in last_update:
                     db.reference(path).set(
                         {
@@ -271,7 +276,8 @@ class EventManager:
             self.windows[session_id] = AffectiveWindow.create(
                 discussion_id=session_id,
                 first_message=event.to_human_message(),
-                affective_states=[state for state in self.affective_states.values()],
+                affective_states=[state for state in self.affective_states.values()],  # link to current states
+                lifespan=AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
             )
 
             self.logger.info("Opened affective window for session: %s, (event %s)")
