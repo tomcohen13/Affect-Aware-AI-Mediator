@@ -1,6 +1,6 @@
 """Main agent class for the Affective Mediator agent."""
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Mapping
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     PIIMiddleware,  # we'll definitely need that for redacting personal information
@@ -40,6 +40,7 @@ class AffectiveMediator:
 
     def __init__(self, memory = None, logger = None, debug_mode: bool = False):
 
+        self.name = "__mediator__"
         self.fast_model: BaseChatModel = gating_model
         self.reasoning_model: BaseChatModel = reasoning_model  # TODO: change to reasoning_model for production
         self.logger: logging.Logger = logger
@@ -47,18 +48,24 @@ class AffectiveMediator:
         self.is_interesting_prompt = load_prompt(func=self.is_interesting.__name__)
         self.should_intervene_prompt = load_prompt(func=self.should_intervene.__name__)
         self.initial_response_prompt = load_prompt("initial_response")
-        self.post_intervention_cooldown = 45  # seconds in between two interventions
+        self.post_intervention_cooldown = 30  # seconds in between two interventions
 
         self.memory = MemorySaver() if memory is None else memory
         
         self.react_agent = create_agent(
-            model=reasoning_model,
-            middleware=[ # TODO: add middleware for summarization and de-identification
+            model=self.reasoning_model,
+            middleware=[
                 PIIMiddleware(pii_type='email', strategy='redact'),
-                SummarizationMiddleware(model=self.fast_model, max_tokens_before_summary=1000),
+                SummarizationMiddleware(
+                    model=self.fast_model,
+                    max_tokens_before_summary=500,
+                    messages_to_keep=3,
+                ),
             ],
             system_prompt=self.should_intervene_prompt,
             checkpointer=self.memory,
+            state_schema=GroupDiscussionState,
+            response_format=ShouldInterveneDecision,
         )
         
         workflow: StateGraph = self.initialize_workflow()
@@ -69,11 +76,62 @@ class AffectiveMediator:
 
         self.debug_mode = debug_mode
 
+    async def start_discussion(
+        self,
+        discussion_id: str,
+        initial_responses: Mapping[str, str],
+        topic_id: str,
+        condition: str,
+    ):
+        """
+        Synthessize participatns initial responses into a welcoming first message.
+
+        Parameters:
+            discussion_id
+            initial_responses: a dictionary of {participant_id: initial response}
+            metadata: a dictionary containing the following keys (must)
+                topicId: the topic identifier assigned to the discussion
+                condition: mediation condition of discussion: 'none', 'affect', 'no-affect'
+        
+        """
+
+        config = {'configurable': {'thread_id': discussion_id}}
+       
+        if topic_id != "" and topic_id in TOPIC_OPTIONS:
+            topic_prompt = " ".join([TOPIC_OPTIONS[topic_id].get("label"), TOPIC_OPTIONS[topic_id].get("prompt")])
+        else:
+            topic_prompt = topic_id
+
+        initial_state = {
+            "discussion_id": discussion_id,
+            "initial_responses": initial_responses,
+            "topic": topic_id,
+            "condition": condition,
+            "messages": [],
+            "post_intervention_cooldown": self.post_intervention_cooldown,
+            "started_discussion": True,
+        }
+
+        _ = await self.graph.aupdate_state(config, values=initial_state)
+
+        initial_responses_msgs = [
+            HumanMessage(f"Participant {k} wrote: {v}")
+            for k, v in initial_responses.items()
+        ]
+
+        response = await self.fast_model.ainvoke(
+            input=[
+                SystemMessage(self.initial_response_prompt.format(topic_prompt=topic_prompt)), 
+                *initial_responses_msgs,
+            ]
+        )
+        return response.content
+
     # TODO: refine signature and add docstring
     async def run(self, input: dict | AffectiveWindow, pathway: Literal['is_interesting', 'should_intervene', 'initial_response']):
         '''
 
-        Two pathways:
+        Pathways:
 
         1. is_interesting: initial gating judgment of a message, whether it could lead to something interesting
             for that pathway, a fast model is used over an affective "package" (see below).
@@ -97,46 +155,8 @@ class AffectiveMediator:
             if pathway=should_intervene --> ShouldInterveneDecision 
         '''
 
-        if pathway == "initial_response":
-
-            config = {'configurable': {'thread_id': input['discussion_id']}}
-
-            meta = input['meta']
-            initial_responses = {k: v['text'] for k, v in input['initial_responses'].items()}
-
-            topic_id = meta.get('topicId', "")
-            if topic_id != "" and topic_id in TOPIC_OPTIONS:
-                topic = " ".join([TOPIC_OPTIONS[topic_id].get("label"), TOPIC_OPTIONS[topic_id].get("prompt")])
-            else:
-                topic = topic_id
-
-            initial_state = {
-                "discussion_id": input["discussion_id"],
-                "initial_responses": initial_responses,
-                "topic": topic,
-                "condition": meta.get("condition"),
-                "messages": [],
-                "post_intervention_cooldown": self.post_intervention_cooldown
-            }
-
-            _ = await self.graph.aupdate_state(config, values=initial_state, )
-
-            initial_responses_msgs = [
-                HumanMessage(f"Participant {k} wrote: {v}")
-                for k, v in initial_responses.items()
-            ]
-
-            response = await self.fast_model.ainvoke(
-                input=[
-                    SystemMessage(self.initial_response_prompt.format(topic_prompt=topic)), 
-                    *initial_responses_msgs,
-                ]
-            )
-
-            return response.content
-
-
-        elif pathway == "is_interesting":
+        # first half of execution graph
+        if pathway == "is_interesting":
 
             config = {'configurable': {'thread_id': input['discussion_id']}}
  
@@ -146,25 +166,15 @@ class AffectiveMediator:
             return
 
         elif pathway == "should_intervene":
-            '''
-            model should reason over a summarized version of the affective window...
-            the langchain convention for resuming an execution graph is with input = None
-            and just config, so I need to update the state with the window, time-travel-style,
-            before exeucting.
 
-            Rough pseudo-code:
-                - state_update = window.to_model_input()
-                - self.graph.update_state(config=config, values=state_update)
-                - execute graph from affective_window
-            '''
             config = {'configurable': {'thread_id': input.discussion_id}}
             
-            new_values = input.to_graph_state(exclude_first_message=True)
+            new_values = {"last_affective_window": input}
             
             _ = await self.graph.aupdate_state(config=config, values=new_values, as_node="affective_window")
 
             async for update in self.graph.astream(None, config=config, stream_mode="updates"):
-                self.logger.info(update)
+                self.logger.info(f"[AGENT WORKFLOW]: {update}")
             return update
 
 
@@ -177,12 +187,10 @@ class AffectiveMediator:
         # workflow.add_node("is_interesting", ...)  # decide if interesting enough to start a window
         workflow.add_node("affective_window", self.affective_window)  # start affective window
         workflow.add_node("should_intervene", self.should_intervene)  # decide if intervention is needed
-        workflow.add_node("intervene", self.send_intervention)  # craft intervention message
 
         workflow.add_conditional_edges(START, self.is_interesting, {"interesting": "affective_window", "nah": END})
         workflow.add_edge("affective_window", "should_intervene")
-        workflow.add_conditional_edges("should_intervene", self.evaluate_intervention_decision, {"intervene": "intervene", "nah": END})
-        workflow.add_edge("intervene", END)
+        workflow.add_edge("should_intervene", END)
 
         return workflow
 
@@ -218,20 +226,11 @@ class AffectiveMediator:
         return state
 
 
-    async def should_intervene(self, state: GroupDiscussionState) -> GroupDiscussionState:
+    async def should_intervene(self, state: GroupDiscussionState):
         """
         Determine if an intervention is needed in the current affective window.
         """
         # enforce cooldown period between interventions
-        if state.get('last_intervention_time') and (datetime.now() - state['last_intervention_time']).total_seconds() < state['post_intervention_cooldown']:
-
-            decision = ShouldInterveneDecision(
-                should_intervene=False,
-                reason="<COOLDOWN_PERIOD_ACTIVE>"
-            )
-            return {
-                "last_intervention_decision": decision
-            }
         
         if not state.get('last_affective_window'):
             decision = ShouldInterveneDecision(
@@ -242,47 +241,41 @@ class AffectiveMediator:
                 "last_intervention_decision": decision
             }
 
+        if (  # within cooldown period, don't intervene
+            state.get('last_intervention_time') and
+            (datetime.now() - state['last_intervention_time']).total_seconds() < state['post_intervention_cooldown']
+        ):
+
+            decision = ShouldInterveneDecision(
+                should_intervene=False,
+                reason="<COOLDOWN_PERIOD_ACTIVE>"
+            )
+            return {"last_intervention_decision": decision}
+
         # fetch affective window
         window = state['last_affective_window']
 
-        group_state_report = window.to_model_context()
-
-        prompt_with_topic = self.should_intervene_prompt.format(topic_prompt=state['topic'])
+        prompt_with_topic = self.should_intervene_prompt.format(
+            topic_prompt="\n".join(
+                [
+                    TOPIC_OPTIONS[state['topic']].get("label"),
+                    TOPIC_OPTIONS[state['topic']].get("prompt"),
+                ]
+            )
+        )
 
         messages = [
             SystemMessage(content=prompt_with_topic), 
-            *window.all_messages,
-            group_state_report,
+            *window.all_messages,  # all messages from window
+            window.to_system_message(),  # group affective state report
         ]
 
-        decision: ShouldInterveneDecision = await call_model_async(
-            messages=messages,
-            model=self.reasoning_model,
-            output_type=ShouldInterveneDecision,
+        response = await self.react_agent.ainvoke(
+            input={"messages": messages},
+            config={'configurable': {'thread_id': state['discussion_id']}},
         )
-        if decision.should_intervene:
-            return {
-                "messages": messages,
-                "last_intervention_decision": decision,
-                "last_intervention_time": datetime.now()
-            }
-        else:
-            return {
-                "messages": messages,
-                "last_intervention_decision": decision,
-            }
+        return {"last_intervention_decision": response['structured_response']}
     
-    async def evaluate_intervention_decision(self, state: GroupDiscussionState) -> str:
-        """Evaluate decision from previous state"""
-        return "intervene" if state['last_intervention_decision'].should_intervene else "nah"
-
-
-    async def send_intervention(self, state: GroupDiscussionState) -> GroupDiscussionState:
-        """
-        A placeholder function for crafting and sending an intervention message.
-        """
-        return state
-
 
 # TODO: either remove or move inside AffectiveMediator
 @tool

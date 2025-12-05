@@ -1,5 +1,6 @@
 """Unit tests for base models logic"""
 
+from typing import Dict
 import pytest
 from datetime import datetime, timedelta
 from langchain_core.messages import HumanMessage
@@ -11,6 +12,13 @@ from agent.base_models import (
     EmotionAnnotation,
 )
 from agent.constants import HUME_EMOTIONS_LIST_TEXT, HUME_EMOTIONS_LIST_VISION_AUDIO
+
+
+def create_mock_activations(val=0.3):
+    return [
+        EmotionAnnotation(name=emotion, activation=val)
+        for emotion in HUME_EMOTIONS_LIST_VISION_AUDIO  # Use first 10 for simplicity
+    ]
 
 
 def create_initial_state(participant_id: str = "test_participant", activation_values = 0.3) -> AffectiveState:
@@ -48,8 +56,9 @@ def create_initial_state(participant_id: str = "test_participant", activation_va
 
 def create_affective_event(
     modality: str,
-    emotion_activations: list[EmotionAnnotation],
-    timestamp: datetime = None,
+    emotion_activations: list[EmotionAnnotation] = create_mock_activations(),
+    timestamp: datetime = datetime.now(),
+    payload: Dict = {},
 ) -> AffectiveEvent:
     """Helper to create an AffectiveEvent"""
     if timestamp is None:
@@ -61,7 +70,7 @@ def create_affective_event(
         timestamp=timestamp,
         modality=modality,
         emotion_activations=emotion_activations,
-        payload={},
+        payload=payload,
     )
 
 

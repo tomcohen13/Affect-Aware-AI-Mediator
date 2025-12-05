@@ -413,7 +413,7 @@ class AffectiveWindow(BaseModel):
         
         return {"last_affective_window": self}
     
-    def to_model_context(self) -> SystemMessage:
+    def to_system_message(self) -> SystemMessage:
         """
         Creates a textual report of the group's affective state from all the data,
         and returns it a system message ready for agent ingestion.

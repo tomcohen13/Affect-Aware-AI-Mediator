@@ -15,12 +15,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
+import os
+import redis  # TODO: replace in-memory windows with redis
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 import sys
-import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import firebase_admin
@@ -39,7 +39,7 @@ from agent.constants import (
     HUME_EMOTIONS_LIST_TEXT,
     HUME_EMOTIONS_LIST_VISION_AUDIO,
 )
-from agent.utils import datetime_to_string
+from agent.utils import create_raw_message, datetime_to_string
 
 class EventManager:
     """
@@ -123,13 +123,13 @@ class EventManager:
             return
 
         # run coroutine in this thread (firebase-admin listener has no loop)
-        asyncio.run(self.handle_new_event(session_id, event_id, ev))
+        asyncio.run(self.handle_new_event(session_id, ev))
 
     # -------------------------------------------------------------------------
     # Core logic: window management
     # -------------------------------------------------------------------------
 
-    async def handle_new_event(self, session_id: str, event_id: str, ev: dict):
+    async def handle_new_event(self, session_id: str, ev: dict):
         """
         Called for each new AffectiveEvent.
 
@@ -150,26 +150,28 @@ class EventManager:
             # synthesize initial message from initial responses and send in chat
             self.logger.info(f"Conversation started! session id: {session_id}")
 
+            # get first message from agent
             session_data = db.reference(f"{self.study_id}/states/{session_id}/").get()
             metadata = session_data.get('meta')
-            initial_responses = session_data.get('initial_responses')
-
-            input = {
-                "discussion_id": session_id,
-                "meta": metadata,
-                "initial_responses": initial_responses,
+            initial_responses = {
+                pid: response.get('text', '')
+                for pid, response
+                in session_data.get('initial_responses', {}).items()
             }
 
-            response: str = await self.mediator.run(input, pathway="initial_response")
+            response: str = await self.mediator.start_discussion(
+                discussion_id=session_id,
+                initial_responses=initial_responses,
+                topic_id=metadata.get('topicId'),
+                condition=metadata.get('condition')
+            )
 
             # create new message in chat
-            new_message = {
-                "id": str(uuid.uuid4()),
-                "content": response,
-                "type": "mediator",
-                "senderId": "__mediator__",
-                "ts": int(datetime.now(timezone.utc).timestamp()),
-            }
+            new_message = create_raw_message(
+                content=response,
+                type="mediator",
+                sender_id=self.mediator.name,
+            )
 
             db.reference(
                 f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}"
@@ -192,8 +194,6 @@ class EventManager:
         if event.emotion_activations == []:
             self.logger.warn(f"Event {event.event_id} from session {session_id} did not have any annotations")
 
-
-        self.logger.info(f"Updating affective state of participant: {event.participant_id}")
         self._update_affective_state_of_participant(session_id=session_id, event=event)
 
         # 2. check for existing window
@@ -209,7 +209,6 @@ class EventManager:
                 # expand window slightly if messages are coming in
                 if event.modality == "text":
                     window.expiration_time += timedelta(seconds=2)
-                # self.logger.info(f"Active window exists (id: {window.window_id}), added {event}.")
                 return
             
             else:
@@ -217,43 +216,28 @@ class EventManager:
                 window = window.model_copy()
                 del self.windows[session_id]
                 
-                last_update = await self.mediator.run(window, pathway="should_intervene")
-                path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{str(datetime.now().timestamp())}"
-                if "intervene" in last_update:
-                    db.reference(path).set(
-                        {
-                            'trigger': last_update['intervene']['last_affective_window'].first_message.content,
-                            'last_intervention_decision': last_update['intervene']['last_intervention_decision'].model_dump(),
-                            'last_intervention_time': last_update['intervene']['last_intervention_time'].isoformat(),
-                        }
-                    )
-                    # returns the 'intervene' node
-                    decision = last_update['intervene']['last_intervention_decision']
-                else:
-                    # should_intervene node (i.e., decided against)
-                    decision = last_update['should_intervene']['last_intervention_decision']
-                    db.reference(path).set(
-                        {
-                            'last_intervention_decision': last_update['should_intervene']['last_intervention_decision'].model_dump(),
-                        }
-                    )
+                last_update = await self.mediator.run(window, pathway='should_intervene')
+                decision = last_update['should_intervene']['last_intervention_decision']
 
                 if decision.should_intervene:
                     
-                    # create new message in chat
-                    new_message = {
-                        "id": str(uuid.uuid4()),
-                        "content": decision.intervention_message,
-                        "type": "mediator",
-                        "senderId": "__mediator__",
-                        "ts": int(datetime.now(timezone.utc).timestamp()),
+                    # send message in chat
+                    new_message = create_raw_message(
+                        content=decision.intervention_message,
+                        type="mediator",
+                        sender_id=self.mediator.name,
+                    )
+                    db.reference(f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}").set(new_message)
+                
+                # regardless, update 'charlie' path in DB
+                path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{int(datetime.now().timestamp())}"
+                db.reference(path).set(
+                    {
+                        'trigger': window.first_message.content,
+                        'all_messages': window.all_messages,
+                        'decision': decision.model_dump(),
                     }
-                    db.reference(
-                        f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}"
-                    ).set(new_message)
-                else:
-                    # no intervention needed, continue
-                    pass
+                )
 
         if event.modality == "text":
             # No active window
@@ -269,10 +253,11 @@ class EventManager:
             next_step = self.mediator.graph.get_state(config={'configurable': {'thread_id': session_id}}).next
             if next_step == ():
                 # not interesting, break
-                self.logger.info("decided not interesting!")
+                self.logger.info(f"[AGENT WORKFLOW] message: {event.payload['content']} | Decision: do NOT trigger a window.")
                 return
             
             # TODO: instead of in-memory move to redis
+            self.logger.info(f"[AGENT WORKFLOW] Starting affective window for session: {session_id}")
             self.windows[session_id] = AffectiveWindow.create(
                 discussion_id=session_id,
                 first_message=event.to_human_message(),
@@ -280,7 +265,6 @@ class EventManager:
                 lifespan=AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
             )
 
-            self.logger.info("Opened affective window for session: %s, (event %s)")
             return
 
 
@@ -297,9 +281,9 @@ class EventManager:
                 participant_id=event.participant_id,
                 last_update=event.timestamp,
                 running_states={
-                    "text": [EmotionAnnotation(name=name, activation=0.5) for name in HUME_EMOTIONS_LIST_TEXT],
-                    "vision": [EmotionAnnotation(name=name, activation=0.5) for name in HUME_EMOTIONS_LIST_VISION_AUDIO],
-                    "audio": [EmotionAnnotation(name=name, activation=0.5) for name in HUME_EMOTIONS_LIST_VISION_AUDIO],
+                    "text": [EmotionAnnotation(name=name, activation=0.3) for name in HUME_EMOTIONS_LIST_TEXT],
+                    "vision": [EmotionAnnotation(name=name, activation=0.3) for name in HUME_EMOTIONS_LIST_VISION_AUDIO],
+                    "audio": [EmotionAnnotation(name=name, activation=0.3) for name in HUME_EMOTIONS_LIST_VISION_AUDIO],
                 }
             )
             self.affective_states[f"{session_id}/{event.participant_id}"] = affective_state
@@ -308,14 +292,13 @@ class EventManager:
             success, reason = affective_state.update(event)
             if not success:
                 self.logger.error(reason)
-
             else:
+                affective_state_row = affective_state.model_dump()
+                affective_state_row['last_update'] = datetime_to_string(affective_state_row['last_update'])
+                db.reference(f"{self.study_id}/states/{session_id}/affect/{event.participant_id}").set(affective_state_row)
+                self.logger.info(f"Wrote new affective state of {event.participant_id} into --> {self.study_id}/states/{session_id}/affect/{event.participant_id}")
                 self.logger.info(
-                    f"Updated affective state of participant {event.participant_id}. "
+                    f"[AFFECTIVE STATE] Updated affective state of participant {event.participant_id} "
+                    f"into --> {self.study_id}/states/{session_id}/affect/{event.participant_id}. "
                     f"Dominant emotions: {affective_state.dominant_emotions}."
                 )
-
-            affective_state_row = affective_state.model_dump()
-            affective_state_row['last_update'] = datetime_to_string(affective_state_row['last_update'])
-            db.reference(f"{self.study_id}/states/{session_id}/affect/{event.participant_id}").set(affective_state_row)
-            self.logger.info(f"Wrote new affective state of {event.participant_id} into --> {self.study_id}/states/{session_id}/affect/{event.participant_id}")

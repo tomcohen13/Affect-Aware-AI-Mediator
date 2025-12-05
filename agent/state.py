@@ -1,7 +1,7 @@
 """Execution graph states for the affective mediator agent."""
 
 from datetime import datetime
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, NotRequired, Optional
 from langchain.agents import AgentState
 from pydantic import Field
 
@@ -13,39 +13,27 @@ def add_dicts(d1, d2):
     return {**d1, **d2}
 
 
-# TODO
 class GroupDiscussionState(AgentState):
     """
     State schema for the Affective Mediator agent in group discussions.
     """
     
-    discussion_id: str = Field(..., description="Unique identifier of the group discussion")
-    
-    topic: str = Field(..., description="The topic of the group discussion")
-
-    condition: Literal['none', 'no_affect', 'affect'] = Field(..., description="Condition")
-    
-    # participants: List[str] = Field(default_factory=list, description="List of participant IDs in the discussion")
-    
     # messages: inherited from AgentState
+    
+    discussion_id: str  # unique identifier of the group discussion
+    
+    topic: str # The topic of the group discussion
 
-    initial_responses: Dict[str, str] = Field("Participants initial responses")
+    condition: Literal['none', 'no_affect', 'affect']  # discussion condition
 
-    chat_summary: str = Field(default="", description="Running summary of chat so far")
+    initial_responses: Dict[str, str]
 
-    last_affective_window: Optional[AffectiveWindow] = Field(
-        default_factory=None,
-        description="The most recent affective states of participants in the discussion"
-    )
+    last_affective_window: Optional[AffectiveWindow]
 
-    last_intervention_decision: ShouldInterveneDecision = Field(
-        default=None,
-        description="The decision made by the mediator on whether to intervene in the last check"
-    )
+    last_intervention_decision: Optional[ShouldInterveneDecision]
 
-    last_intervention_time: datetime = Field(
-        default=None,
-        description="Timestamp of the last intervention made by the mediator"
-    )
+    last_intervention_time: Optional[datetime]
 
-    post_intervention_cooldown: int = Field(description="Minimum interval in seconds between mediator interventions", default=30)
+    post_intervention_cooldown: int # TODO: move this to constants
+
+    started_discussion: bool

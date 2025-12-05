@@ -1,7 +1,9 @@
 """Utility functions to be used across agent modules."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any, Dict
+import uuid
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
@@ -36,6 +38,16 @@ def create_human_message_from_raw(raw_message: dict) -> HumanMessage:
             'timestamp': timestamp,
         }
     )
+
+
+def create_raw_message(content: str, type: str, sender_id, timestamp = None) -> Dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "content": content,
+        "type": type,
+        "senderId": sender_id,
+        "ts": int(datetime.now(timezone.utc).timestamp()) if timestamp is None else timestamp,
+    }
 
 
 def datetime_to_string(dt: datetime) -> str:
