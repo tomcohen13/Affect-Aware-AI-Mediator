@@ -32,6 +32,7 @@ from agent.base_models import (
     AffectiveState,
     AffectiveWindow,
     EmotionAnnotation,
+    ShouldInterveneDecision,
 )
 from agent.constants import (
     AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
@@ -123,7 +124,10 @@ class EventManager:
             return
 
         # run coroutine in this thread (firebase-admin listener has no loop)
-        asyncio.run(self.handle_new_event(session_id, ev))
+        try:
+            asyncio.run(self.handle_new_event(session_id, ev))
+        except Exception as e:
+            self.logger.error(f"There was an error processing event {ev}: {e}")
 
     # -------------------------------------------------------------------------
     # Core logic: window management
@@ -217,7 +221,7 @@ class EventManager:
                 del self.windows[session_id]
                 
                 last_update = await self.mediator.run(window, pathway='should_intervene')
-                decision = last_update['should_intervene']['last_intervention_decision']
+                decision: ShouldInterveneDecision = last_update['should_intervene']['last_intervention_decision']
 
                 if decision.should_intervene:
                     
@@ -227,17 +231,23 @@ class EventManager:
                         type="mediator",
                         sender_id=self.mediator.name,
                     )
-                    db.reference(f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}").set(new_message)
+                    try:
+                        db.reference(f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}").set(new_message)
+                    except Exception as e:
+                        self.logger.error(f"Couldn't right message {new_message} to DB: {e}")
                 
-                # regardless, update 'charlie' path in DB
+                # regardless, update 'charlie' path in DB with window
                 path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{int(datetime.now().timestamp())}"
-                db.reference(path).set(
-                    {
-                        'trigger': window.first_message.content,
-                        'all_messages': window.all_messages,
-                        'decision': decision.model_dump(),
-                    }
-                )
+                try:
+                    db.reference(path).set(
+                        {
+                            'trigger': window.first_message.content,
+                            'window': window.to_system_message().content,
+                            'decision': decision.model_dump(),
+                        }
+                    )
+                except Exception as e:
+                    self.logger.error(f"Couldn't right decision {decision} to DB: {e}")
 
         if event.modality == "text":
             # No active window
