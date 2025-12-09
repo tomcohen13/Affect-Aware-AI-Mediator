@@ -11,8 +11,13 @@ User text:
 Top-level affect snapshot (may include face/burst/language top emotions):
 {event.affect}
 
-Answer with exactly one word:
+Output is_interesting as true if user mentions the string "@CHARLIE" in their message.
 
-- "YES" if the message is emotionally charged, conflictual, offensive, or likely
-  to trigger disagreement or escalation.
-- "NO" otherwise.
+Output a dictionary with these fields:
+{
+is_interesting: bool = Field(description="Whether the event is interesting or not")
+reason: Optional[str] = Field(
+        description="Optional reason why the event is considered interesting",
+        default=None,
+    )
+}
