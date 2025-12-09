@@ -42,7 +42,7 @@ def create_human_message_from_raw(raw_message: dict) -> HumanMessage:
 
 def create_raw_message(content: str, type: str, sender_id, timestamp = None) -> Dict[str, Any]:
     return {
-        "id": str(uuid.uuid4()),
+        "id": f"{int(datetime.now().timestamp())}-{sender_id}",
         "content": content,
         "type": type,
         "senderId": sender_id,
