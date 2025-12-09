@@ -28,6 +28,9 @@ User 3: I think we need christianity to govern our lives because you guys [the l
 
 Reason: There is escalating tension in the group that is derailing the conversation.
 
+Example intervention:
+A user references @CHARLIE with a request or message attached to it.
+
 IF NEEDED:
 
 **Step 3: Generate Intervention Content**
