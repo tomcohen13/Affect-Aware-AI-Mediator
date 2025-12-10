@@ -32,6 +32,7 @@ from agent.base_models import (
     AffectiveState,
     AffectiveWindow,
     EmotionAnnotation,
+    IsInterestingDecision,
     ShouldInterveneDecision,
 )
 from agent.constants import (
@@ -234,15 +235,17 @@ class EventManager:
                     try:
                         db.reference(f"{self.study_id}/states/{session_id}/chat/messages/{new_message['id']}").set(new_message)
                     except Exception as e:
-                        self.logger.error(f"Couldn't right message {new_message} to DB: {e}")
+                        self.logger.error(f"Couldn't write message {new_message} to DB: {e}")
                 
                 # regardless, update 'charlie' path in DB with window
-                path = f"{self.study_id}/states/{session_id}/charlie/should_intervene-{int(datetime.now().timestamp())}"
+                path = f"{self.study_id}/states/{session_id}/charlie/{int(datetime.now().timestamp())}-should_intervene"
                 try:
                     db.reference(path).set(
                         {
-                            'trigger': window.first_message.content,
-                            'window': window.to_system_message().content,
+                            'context': {
+                                'window': window.to_system_message().content,
+                                'trigger': window.first_message.content,
+                            },
                             'decision': decision.model_dump(),
                         }
                     )
@@ -258,23 +261,31 @@ class EventManager:
                 "affective_sperm": self.affective_states[f"{session_id}/{event.participant_id}"],
             }
             
-            _ = await self.mediator.run(affective_package, pathway="is_interesting")
-            # now let's check the state of the graph
-            next_step = self.mediator.graph.get_state(config={'configurable': {'thread_id': session_id}}).next
-            if next_step == ():
-                # not interesting, break
-                self.logger.info(f"[AGENT WORKFLOW] message: {event.payload['content']} | Decision: do NOT trigger a window.")
-                return
+            decision: IsInterestingDecision = await self.mediator.run(affective_package, pathway="is_interesting")
             
-            # TODO: instead of in-memory move to redis
-            self.logger.info(f"[AGENT WORKFLOW] Starting affective window for session: {session_id}")
-            self.windows[session_id] = AffectiveWindow.create(
-                discussion_id=session_id,
-                first_message=event.to_human_message(),
-                affective_states=[state for state in self.affective_states.values()],  # link to current states
-                lifespan=AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
-            )
+            if not decision.is_interesting:
+                self.logger.info(f"[AGENT] message: {event.payload['content']} | Decision: do NOT trigger a window.")
+            else:
+                # TODO: instead of in-memory move to redis
+                self.logger.info(f"[EM] Starting affective window for session: {session_id}")
+                self.windows[session_id] = AffectiveWindow.create(
+                    discussion_id=session_id,
+                    first_message=event.to_human_message(),
+                    affective_states=[state for state in self.affective_states.values()],  # link to current states
+                    lifespan=AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
+                )
 
+            # write decision to DB
+            # TODO: move all paths to a path generator function for consistecy!
+            path = f"{self.study_id}/states/{session_id}/charlie/{int(datetime.now().timestamp())}-is_interesting"
+            payload = {
+                "message": event.payload,
+                "decision": decision.model_dump()
+            }
+            try:
+                db.reference(path).set(payload)  
+            except Exception as e:
+                self.logger.error(f"Could not write decision to RTDB: {e}")
             return
 
 

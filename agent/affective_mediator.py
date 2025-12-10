@@ -7,7 +7,7 @@ from langchain.agents.middleware import (
     SummarizationMiddleware,  # could be good for the agent to hold a running summary of chat as opposed to all messages
 )
 from langchain_core.tools import tool
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from langchain.chat_models.base import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph
@@ -128,10 +128,11 @@ class AffectiveMediator:
         return response.content
 
     # TODO: refine signature and add docstring
-    async def run(self, input: dict | AffectiveWindow, pathway: Literal['is_interesting', 'should_intervene', 'initial_response']):
+    async def run(self, input: dict | AffectiveWindow, pathway: Literal['is_interesting', 'should_intervene']):
         '''
-
+        Run agent workflow
         Pathways:
+        
 
         1. is_interesting: initial gating judgment of a message, whether it could lead to something interesting
             for that pathway, a fast model is used over an affective "package" (see below).
@@ -162,8 +163,8 @@ class AffectiveMediator:
  
             state = {"messages": [input["event"].to_human_message()]}
 
-            _ = await self.graph.ainvoke(state, config=config)
-            return
+            decision = await self.graph.ainvoke(state, config=config)
+            return decision["last_is_interesting_decision"]
 
         elif pathway == "should_intervene":
 
@@ -174,7 +175,7 @@ class AffectiveMediator:
             _ = await self.graph.aupdate_state(config=config, values=new_values, as_node="affective_window")
 
             async for update in self.graph.astream(None, config=config, stream_mode="updates"):
-                self.logger.info(f"[AGENT WORKFLOW]: {update}")
+                self.logger.info(f"[AGENT]: {update}")
             return update
 
 
@@ -184,11 +185,12 @@ class AffectiveMediator:
         """
         workflow = StateGraph(GroupDiscussionState)
         
-        # workflow.add_node("is_interesting", ...)  # decide if interesting enough to start a window
+        workflow.add_node("is_interesting", self.is_interesting)  # decide if interesting enough to start a window
         workflow.add_node("affective_window", self.affective_window)  # start affective window
         workflow.add_node("should_intervene", self.should_intervene)  # decide if intervention is needed
 
-        workflow.add_conditional_edges(START, self.is_interesting, {"interesting": "affective_window", "nah": END})
+        workflow.add_edge(START, "is_interesting")
+        workflow.add_conditional_edges("is_interesting", self.should_proceed, {True: "affective_window", False: END})
         workflow.add_edge("affective_window", "should_intervene")
         workflow.add_edge("should_intervene", END)
 
@@ -214,7 +216,10 @@ class AffectiveMediator:
             output_type=IsInterestingDecision,
         )
 
-        return "interesting" if decision.is_interesting else "nah"
+        return {"last_is_interesting_decision": decision, "last_message": state['messages'][-1]}
+
+    async def should_proceed(self, state: GroupDiscussionState) -> bool:
+        return state['last_is_interesting_decision'].is_interesting
 
 
     async def affective_window(self, state: GroupDiscussionState) -> GroupDiscussionState:
@@ -264,8 +269,11 @@ class AffectiveMediator:
             )
         )
 
+        self_notes = state.get("last_is_interesting_decision").notes
+
         messages = [
-            SystemMessage(content=prompt_with_topic), 
+            SystemMessage(content=prompt_with_topic),
+            AIMessage(content=self_notes, sender="__CHARLIE_INTERNAL__"),
             *window.all_messages,  # all messages from window
             window.to_system_message(),  # group affective state report
         ]

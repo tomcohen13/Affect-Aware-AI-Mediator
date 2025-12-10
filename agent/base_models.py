@@ -30,6 +30,9 @@ class IsInterestingDecision(BaseModel):
         description="Optional reason why the event is considered interesting",
         default=None,
     )
+    notes: Optional[str] = Field(
+        description="notes to future self on what to be on the lookout for while considering intervention"
+    )
 
 
 class ShouldInterveneDecision(BaseModel):
@@ -272,7 +275,7 @@ class AffectiveState(BaseModel):
 
     @staticmethod
     def _update_running_emotion(old, new):
-        return 0.5 * old + 0.5 * new
+        return 0.75 * old + 0.25 * new
 
     def extract_dominant_emotions(self, activations: List[EmotionAnnotation]) -> Set[EmotionAnnotation]:
         """

@@ -5,7 +5,7 @@ from typing import Dict, Literal, NotRequired, Optional
 from langchain.agents import AgentState
 from pydantic import Field
 
-from agent.base_models import AffectiveWindow, ShouldInterveneDecision
+from agent.base_models import AffectiveWindow, IsInterestingDecision, ShouldInterveneDecision
 
 
 # reduction functions
@@ -27,6 +27,10 @@ class GroupDiscussionState(AgentState):
     condition: Literal['none', 'no_affect', 'affect']  # discussion condition
 
     initial_responses: Dict[str, str]
+
+    last_message: Optional[str]
+
+    last_is_interesting_decision: Optional[IsInterestingDecision]
 
     last_affective_window: Optional[AffectiveWindow]
 

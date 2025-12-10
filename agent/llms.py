@@ -23,6 +23,7 @@ gating_model = ChatOpenAI(
     model=GATING_MODEL_NAME,
     temperature=0.0,
     max_retries=3,
+    timeout=4.0,
 )
 
 reasoning_model = ChatOpenAI(
@@ -31,7 +32,7 @@ reasoning_model = ChatOpenAI(
     model=REASONING_MODEL_NAME,
     temperature=0.7,
     max_retries=2,
-    timeout=8,
+    timeout=8.0,
 )
 
 
