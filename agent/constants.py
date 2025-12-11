@@ -191,7 +191,7 @@ TOPIC_OPTIONS: Mapping[str, Mapping[str, str]] = {
     },
     "political_violence": {
         "label": "Political Violence and Extremism",
-        "prompt": "Political rallies now come with security screenings. Both sides say the other is radicalizing extremists and inspiring violence. Is left-wing or right-wing violence the real threat, or is asking that question already part of the problem?",
+        "prompt": "Is left-wing or right-wing violence currently posing a bigger threat? Both sides say the other is radicalizing extremists and inspiring violence.",
         "exampleTakes": "\"Right-wing extremism is the FBI's top domestic threat—the data is clear about where violence comes from\" vs. \"The media ignores left-wing riots and property destruction while obsessing over right-wing threats—both are wrong\" vs. \"Inflammatory rhetoric from politicians and media on both sides is radicalizing people—we need to tone down the temperature everywhere\""
     }
 }

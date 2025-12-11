@@ -205,8 +205,15 @@ class AffectiveMediator:
         if not state.get('messages') or len(state['messages']) == 0:
             return "nah"
 
+        topic_prompt = ":".join(
+            [
+                TOPIC_OPTIONS[state['topic']].get("label"),
+                TOPIC_OPTIONS[state['topic']].get("prompt"),
+            ]
+        )
+
         messages = [
-            SystemMessage(content=self.is_interesting_prompt),
+            SystemMessage(content=self.is_interesting_prompt.format(topic_prompt=topic_prompt)),
             HumanMessage(content=state['messages'][-1].content),  # last message in the discussion
         ]
 
