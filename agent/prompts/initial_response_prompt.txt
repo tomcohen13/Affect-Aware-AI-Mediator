@@ -16,5 +16,7 @@ Hey I'm CHARLIE, an AI designed to help people navigate difficult conversations.
 
 It seems that <synthesis>. Curious to hear more about <conversation opener>.
 
-You lead the chat, and I'll just be here in the background to help if needed.
+You lead the chat, and I'll be here in the background to help. 
+
+If you mention @CHARLIE with a request, then I'll respond!
 """
