@@ -55,11 +55,13 @@ class EventManager:
         self,
         study_id: str,
         mediator: AffectiveMediator,
-        database_url: str,
+        firebase_url: str,
+        redis_client: redis.Redis, 
         service_account_str: str,
     ):
         self.study_id = study_id
         self.mediator = mediator
+        self.redis_client = redis_client
 
         self.logger = logging.getLogger("EventManager")
         self.logger.setLevel(logging.INFO)
@@ -74,7 +76,7 @@ class EventManager:
         if not firebase_admin._apps:
             service_account_json = json.loads(service_account_str)
             cred = credentials.Certificate(service_account_json)
-            firebase_admin.initialize_app(cred, {"databaseURL": database_url})
+            firebase_admin.initialize_app(cred, {"databaseURL": firebase_url})
 
         self._listener = None
 
@@ -82,9 +84,10 @@ class EventManager:
     # Public API
     # -------------------------------------------------------------------------
 
-    def start(self):
+    async def start(self):
         """Start listening to RTDB state changes."""
         states_ref = db.reference(f"{self.study_id}/states")
+        self._loop = asyncio.get_running_loop()
         self.logger.info("Starting RTDB listener at %s/states", self.study_id)
         self._listener = states_ref.listen(self._on_state_event)
 
@@ -111,8 +114,7 @@ class EventManager:
         if event.path == "/" or event.data is None:
             return
 
-        path = event.path.lstrip("/")  # e.g. '-SESSION_ID/events/EVENT_ID'
-        parts = path.split("/")
+        parts = event.path.lstrip("/").split("/")  # e.g. '-SESSION_ID/events/EVENT_ID'
         if len(parts) < 3:
             return
 
@@ -120,15 +122,11 @@ class EventManager:
         if maybe_events != "events":
             return
 
-        ev = event.data
-        if not isinstance(ev, dict):
-            return
-
         # run coroutine in this thread (firebase-admin listener has no loop)
         try:
-            asyncio.run(self.handle_new_event(session_id, ev))
+            asyncio.run_coroutine_threadsafe(self.handle_new_event(session_id, event.data), self._loop)
         except Exception as e:
-            self.logger.error(f"There was an error processing event {ev}: {e}")
+            self.logger.error(f"There was an error processing event {event_id}: {e}")
 
     # -------------------------------------------------------------------------
     # Core logic: window management
@@ -151,11 +149,15 @@ class EventManager:
             }
         }
         """
+        # obtain 'lock' for processing event, or drop (other instance did)
+        if not await self.redis_client.set(f"processed:{ev['event_id']}", "1", ex=30, nx=True):
+            return
+
         if ev.get("text", "") == CONVERSATION_STARTED_TOKEN:
             # synthesize initial message from initial responses and send in chat
             self.logger.info(f"Conversation started! session id: {session_id}")
 
-            # get first message from agent
+            # fetch initial responses and send first message from mediator
             session_data = db.reference(f"{self.study_id}/states/{session_id}/").get()
             metadata = session_data.get('meta')
             initial_responses = {

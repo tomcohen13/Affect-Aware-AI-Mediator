@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+import os
 from typing import Any, Dict
 import uuid
 from pydantic import BaseModel
@@ -109,3 +110,19 @@ async def stream_thought_process(
         yield out
         out = ""
         await asyncio.sleep(0.05)
+
+
+def check_required_env_vars() -> None:
+    """
+    Before launching app, verify that all necessary environment variables are present.
+    """
+    required_env_vars = [
+        "FIREBASE_URL",
+        "STUDY_ID",
+        "FIREBASE_SERVICE_ACCOUNT_JSON",
+    ]  # TODO: add all
+    
+    missing = [var for var in required_env_vars if not os.getenv(var)]
+
+    if missing != []:
+        raise Exception(f"Missing environment variables: {missing}")

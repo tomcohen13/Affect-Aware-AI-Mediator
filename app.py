@@ -3,11 +3,15 @@ import os
 import secrets
 import sys
 import uvicorn
-from fastapi import FastAPI, Request
+import redis.asyncio as redis
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 from fastapi.middleware import Middleware
 from fastapi.responses import HTMLResponse
-from starlette.middleware.sessions import SessionMiddleware
+from langgraph.checkpoint.redis import AsyncRedisSaver
 from markdown_it import MarkdownIt
+from starlette.middleware.sessions import SessionMiddleware
+from agent.utils import check_required_env_vars
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -19,52 +23,22 @@ load_dotenv()
 
 # Configure logging
 import logging
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-log_level_map = {
-    "DEBUG": logging.DEBUG,
-    "INFO": logging.INFO,
-    "WARNING": logging.WARNING,
-    "ERROR": logging.ERROR,
-    "CRITICAL": logging.CRITICAL,
-}
-log_level = log_level_map.get(log_level, logging.INFO)
+
 
 logging.basicConfig(
-    level=log_level,
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
 logger = logging.getLogger("AffectiveMediatorApp")
-logger.setLevel(log_level)
+logger.setLevel(logging.INFO)
 
-
-# TODO: add a bunch more
-required_env_vars = ["FIREBASE_URL", "STUDY_ID", "FIREBASE_SERVICE_ACCOUNT_JSON"]
-missing = [var for var in required_env_vars if not os.getenv(var)]
-if missing:
-    logger.error(f"Missing required environment variables: {missing}")
-    sys.exit(1)
-
-
-try: 
-    mediator = AffectiveMediator(
-        # memory=...,  # TODO: add checkpointer -- Mongo/Postgres/Redis
-        logger=logger
-    )
-
-    event_manager = EventManager(
-        study_id=os.getenv("STUDY_ID"),
-        mediator=mediator,
-        database_url=os.getenv("FIREBASE_URL"),
-        service_account_str=os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON"),
-    )
-except Exception as e:
-    logger.error(f"Failed to initialize the mediator or the event manager.. {e}")
-    sys.exit(1)
+redis_client = None
+checkpointer = None
+event_manager = None
+mediator = None
 
 
 # Define app middleware
@@ -75,23 +49,59 @@ middleware = [
     )
 ]
 
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Starting EventManager...")
+
+    global redis_client, checkpointer, event_manager, mediator
+
     try:
-        event_manager.start()
-        logger.info("EventManager started successfully")
+        check_required_env_vars()
     except Exception as e:
-        logger.error(f"Failed to start EventManager: {e}", exc_info=True)
-        raise
+        logger.error(e)
+        sys.exit(1)
+
+    redis_client = redis.Redis(
+        host=os.getenv('REDIS_HOST'),
+        port=os.getenv('REDIS_PORT'),
+        username=os.getenv('REDIS_USERNAME'),
+        password=os.getenv('REDIS_PASSWORD'),
+        decode_responses=False,
+    )
+    if not await redis_client.ping():
+        raise ConnectionError("could not connect to Redis client")
     
+    logger.info("Connected to Redis successfully.")
+    
+    checkpointer = AsyncRedisSaver(
+        redis_client=redis_client,
+        ttl={  # TODO: move to config file
+            "default_ttl": 30,
+            "refresh_on_read": False,
+        }
+    )
+    await checkpointer.asetup()
+
+    mediator = AffectiveMediator(
+        checkpointer=checkpointer,
+        logger=logger,
+    )
+
+    event_manager = EventManager(
+        study_id=os.getenv("STUDY_ID"),
+        mediator=mediator,
+        redis_client=redis_client,
+        firebase_url=os.getenv("FIREBASE_URL"),
+        service_account_str=os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON"),
+    )
+    await event_manager.start()
+    logger.info("EventManager started successfully")
+
     yield
-    
+
     # Shutdown
-    logger.info("Shutting down EventManager...")
+    logger.info("Shutting down...")
+    await redis_client.aclose()
     try:
         event_manager.stop()
         logger.info("EventManager stopped successfully")
@@ -112,24 +122,23 @@ async def health_check():
         "event_manager": "running" if event_manager._listener else "stopped"
     }
 
-@app.get("/agent-docs", response_class=HTMLResponse)
-async def agent_docs():
+@app.get("/", response_class=HTMLResponse)
+async def index():
     """Display the agent context and flow documentation."""
     md_file_path = os.path.join(os.path.dirname(__file__), "README.md")
-    
     try:
         with open(md_file_path, "r", encoding="utf-8") as f:
             markdown_content = f.read()
     except FileNotFoundError:
         return HTMLResponse(
-            content="<h1>Documentation not found</h1><p>The documentation file could not be found.</p>",
-            status_code=404
+            content="<h1>Documentation not found</h1>",
+            status_code=404,
         )
-    
+
     # Convert markdown to HTML
     md = MarkdownIt()
     html_content = md.render(markdown_content)
-    
+
     # Wrap in a styled HTML page
     styled_html = f"""
     <!DOCTYPE html>
@@ -236,8 +245,7 @@ async def agent_docs():
     </body>
     </html>
     """
-    
-    return HTMLResponse(content=styled_html) 
+    return HTMLResponse(content=styled_html)
 
 
 if __name__ == "__main__":

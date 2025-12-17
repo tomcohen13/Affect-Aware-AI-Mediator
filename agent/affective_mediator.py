@@ -38,7 +38,7 @@ class AffectiveMediator:
         ...
     """
 
-    def __init__(self, memory = None, logger = None, debug_mode: bool = False):
+    def __init__(self, checkpointer = None, logger = None, debug_mode: bool = False):
 
         self.name = "__mediator__"
         self.fast_model: BaseChatModel = gating_model
@@ -50,7 +50,11 @@ class AffectiveMediator:
         self.initial_response_prompt = load_prompt("initial_response")
         self.post_intervention_cooldown = 30  # seconds in between two interventions
 
-        self.memory = MemorySaver() if memory is None else memory
+        if checkpointer is None:
+            self.memory = MemorySaver()
+            self.logger.warning("No checkpointer specified, using in-memory saver! (NOT to be used in production..!)")
+        else:
+            self.memory = checkpointer
         
         self.react_agent = create_agent(
             model=self.reasoning_model,

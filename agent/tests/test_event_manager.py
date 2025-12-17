@@ -47,7 +47,7 @@ async def test_handle_new_event(test_input, expected_output):
     em = EventManager(
         study_id=os.getenv("STUDY_ID"),
         mediator=AffectiveMediator(),
-        database_url=os.getenv("FIREBASE_URL"),
+        firebase_url=os.getenv("FIREBASE_URL"),
         service_account_str=os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON"),
     )
 
