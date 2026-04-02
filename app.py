@@ -1,16 +1,18 @@
 """FastAPI application for the agent and event manager"""
+import asyncio
 import os
 import secrets
 import sys
 import uvicorn
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware import Middleware
 from fastapi.responses import HTMLResponse
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from markdown_it import MarkdownIt
 from starlette.middleware.sessions import SessionMiddleware
+from agent.base_models import AffectiveEvent
 from agent.utils import check_required_env_vars
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -66,11 +68,12 @@ async def lifespan(app: FastAPI):
         port=os.getenv('REDIS_PORT'),
         username=os.getenv('REDIS_USERNAME'),
         password=os.getenv('REDIS_PASSWORD'),
-        decode_responses=False,
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=None,
     )
     if not await redis_client.ping():
         raise ConnectionError("could not connect to Redis client")
-    
     logger.info("Connected to Redis successfully.")
     
     checkpointer = AsyncRedisSaver(
@@ -94,7 +97,7 @@ async def lifespan(app: FastAPI):
         firebase_url=os.getenv("FIREBASE_URL"),
         service_account_str=os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON"),
     )
-    await event_manager.start()
+    app.state.event_manager_task = asyncio.create_task(event_manager.start())
     logger.info("EventManager started successfully")
 
     yield
@@ -103,7 +106,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     await redis_client.aclose()
     try:
-        event_manager.stop()
+        app.state.event_manager_task.cancel()
         logger.info("EventManager stopped successfully")
     except Exception as e:
         logger.error(f"Error stopping EventManager: {e}", exc_info=True)
@@ -121,6 +124,28 @@ async def health_check():
         "status": "healthy",
         "event_manager": "running" if event_manager._listener else "stopped"
     }
+
+
+@app.post("/event", status_code=status.HTTP_201_CREATED)
+async def process_new_event(event: AffectiveEvent, response: Response):
+    """
+    Enqueue incoming event, ensuring idempotency.
+    """
+    
+    # 1. idempotency check
+    idempotency_key = event.event_id
+
+    if not await redis_client.set(f"seen:{idempotency_key}", "1", ex=360, nx=True):
+        # key already exists
+        response.status_code = status.HTTP_200_OK
+        return {"status": "accepted", "duplicate": True}
+
+    # 3. enqueue
+    await redis_client.publish(channel="events", message=event.model_dump_json())
+
+    return {"status": "accepted", "event_id": idempotency_key}
+
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():

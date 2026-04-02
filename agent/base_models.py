@@ -154,14 +154,15 @@ class AffectiveEvent(BaseModel):
 
     event_id: str = Field(description="unique identifier of the event")
     participant_id: str = Field(description="unique ID of participant generating the event")
+    session_id: str = Field(description="unique session/discussion ID of event")
         
     timestamp: datetime = Field(description="timestamp of event occurrence")
     
     modality: Literal["vision", "audio", "text"] = Field(description="Modality of input data")
 
-    emotion_activations: Optional[List[EmotionAnnotation]] = Field(
+    emotion_activations: List[EmotionAnnotation] = Field(
         default=[],  # should generally be populated, but optional in case Hume API fails
-        min_length=len(HUME_EMOTIONS_LIST_VISION_AUDIO),  # consider removing due to buggy behavior
+        # min_length=len(HUME_EMOTIONS_LIST_VISION_AUDIO),
         max_length=len(HUME_EMOTIONS_LIST_TEXT),
         description="Array of all emotions with corresponding activations",
     )
@@ -345,7 +346,8 @@ class AffectiveWindow(BaseModel):
     
     expiration_time: datetime = Field(description="Timestamp when window expires")
     
-    affective_states: List[AffectiveState] = Field(default_factory=list, description="Recent affective states of participants")
+    # keys of affective states in redis cache
+    affective_states: List[str] = Field(default_factory=list, description="Recent affective states of participants")
 
     last_update: datetime = Field(description="timestamp of most recent event recorded in the window")
 

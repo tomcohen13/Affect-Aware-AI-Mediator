@@ -4,7 +4,6 @@ import asyncio
 from datetime import datetime, timezone
 import os
 from typing import Any, Dict
-import uuid
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
@@ -126,3 +125,27 @@ def check_required_env_vars() -> None:
 
     if missing != []:
         raise Exception(f"Missing environment variables: {missing}")
+
+
+def redis_key(
+    status: str = "", # 'processed', 'seen'
+    type: str = "", # 'window', 'affective_state', 'event'
+    session_id: str = "",
+    participant_id: str = "",
+    event_id: str = "",
+) -> str:
+    """
+    Create a redis-formatted string hierarchical key
+    Example:
+        >> get_redis_type(type="window", participant_id="1234", session_id="5678)
+        'window:5678:1234'
+    """
+
+    # TODO: maybe add prefix to each component to symbolize what it is (e.g., "s" for session, "p" for participant)
+    return ":".join(
+        [
+            s
+            for s in [status, type, session_id, participant_id, event_id]
+            if s != ""
+        ]
+    )
