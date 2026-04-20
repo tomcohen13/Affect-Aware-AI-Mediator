@@ -69,15 +69,20 @@ New Event → Is Interesting? → Affective Window → Should Intervene? → Int
 
 ### Information Flow
 - **Trigger**: New text event with no active window
-- **Input Package**:
+- **Input**:
   ```python
   {
-    "discussion_id": session_id,
-    "event": AffectiveEvent,
-    "affective_sperm": AffectiveState,  # current affective state of sender
-    "meta": {
-      "topicId": str,
-      "condition": "none" | "no_affect" | "affect"
+    "discussion_id": unique discussion id,
+    "event": {
+      "event_id": str,
+      "participant_id": str,
+      "timestamp": ISO8601 string,
+      "modality": "text" | "vision" | "audio",
+      "emotion_activations": [...],
+      "payload": {
+        "content": str
+        "session_id": str
+        }
     }
   }
   ```
