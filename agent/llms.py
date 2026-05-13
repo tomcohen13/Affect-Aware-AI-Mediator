@@ -4,7 +4,7 @@ Initialize LLMs used by the mediator
 import os
 from typing import List, Optional
 from langchain.chat_models import BaseChatModel
-from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AnyMessage
 
 from dotenv import load_dotenv
@@ -12,27 +12,24 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-# GATING_MODEL_NAME = "google/gemini-2.5-flash"
-# REASONING_MODEL_NAME = "google/gemini-3-pro-preview"
-# REASONING_MODEL_NAME = "openai/gpt-5.1-chat"
 
-
-summarization_llm = ChatOpenAI(
-    base_url="https://openrouter.ai/api/v1", # OpenRouter base URL
-    api_key=os.getenv("OPENROUTER_API_KEY"), # OpenRouter API key from environment variable
-    model=os.getenv("SUMMARIZATION_LLM", os.getenv("DEFAULT_LLM")),
+summarization_llm = ChatAnthropic( 
+    model=os.getenv("SUMMARIZATION_LLM", os.getenv("DEFAULT_LLM")), # haiku
     temperature=0.0,
-    max_retries=3,
+    max_tokens=2048,
+    max_retries=2,
     timeout=10.0,
 )
 
-primary_llm = ChatOpenAI(
-    base_url="https://openrouter.ai/api/v1", # OpenRouter base URL
-    api_key=os.getenv("OPENROUTER_API_KEY"), # OpenRouter API key from environment variable
+primary_llm = ChatAnthropic( # type: ignore
     model=os.getenv("DEFAULT_LLM"),
-    temperature=0.5,
-    max_retries=2,
+    temperature=0.3,
+    max_tokens=1000,
+    max_retries=3,
     timeout=10.0,
+    model_kwargs={
+        "extra_headers": {"anthropic-beta": "prompt-caching-2024-07-31"}
+    }
 )
 
 
