@@ -1,372 +1,67 @@
-# Affective Mediator Agent: Context Window and Information Flow
+# CHARLIE v2 — Build Summary
 
-This document summarizes the context window and information flow at different stages of the Affective Mediator agent's execution pipeline.
+## What is this?
 
-## Overview
+CHARLIE (v2) is a public-facing group chat with an AI mediator. Anyone who visits [talktocharlie.io](https://talktocharlie.io) joins a single global chat room and talks to the same agent. It is intentionally not scalable — it's an MVP for iterating on CHARLIE's personality and making the agent accessible to external users for feedback and research.
 
-The Affective Mediator (CHARLIE) is an affect-aware AI agent that monitors online group discussions and intervenes when necessary to promote positive interactions. The system operates through two main components:
+## Architecture
 
-1. **EventManager**: Listens to Firebase RTDB for affective events and manages temporal windows
-2. **AffectiveMediator**: Contains the decision-making workflow using LangGraph
+### Backend (FastAPI)
+- **`app.py`** — FastAPI server with a lifespan that initializes Redis, the LangGraph checkpointer, the AffectiveMediator, and the EventManager.
+- **`/chat/message`** — Accepts a user message, writes it to Firebase RTDB, and asynchronously calls the mediator. If CHARLIE decides to intervene, her response is written to Firebase via `EventManager.post_message_to_session`.
+- **`/chat/join`** — Fires when a user enters the chat. Writes a `type: "join"` event to Firebase for display in the UI.
+- The mediator uses a single fixed `discussion_id = "global"` so all users share one LangGraph conversation thread and checkpointed memory.
+- Firebase Admin SDK handles all writes (bypasses security rules). The browser never writes directly to Firebase.
 
-## Execution Pipeline
+### Frontend (React + Vite + Tailwind)
+- **`src/App.jsx`** — Single-file React app. Subscribes to Firebase RTDB at `v2/states/global/chat/messages` for real-time message delivery. POSTs to the FastAPI backend to send messages and join events.
+- **`src/firebase.js`** — Firebase web client initialization from `VITE_*` env vars.
+- Participant identity is a name entered on first visit, stored in `localStorage`.
 
-The agent follows a multi-stage pipeline with distinct context windows at each stage:
-
+### Real-time flow
 ```
-New Event → Is Interesting? → Affective Window → Should Intervene? → Intervention
-```
-
----
-
-## Stage 1: Event Reception
-
-**Location**: `EventManager.handle_new_event()`
-
-### Context Window
-- **Input**: Raw Firebase event data
-- **Data Structure**: 
-  ```python
-  {
-    "event_id": str,
-    "participant_id": str,
-    "timestamp": ISO8601 string,
-    "modality": "text" | "vision" | "audio",
-    "emotion_activations": [EmotionAnnotation],
-    "payload": {
-      "content": str,  # for text messages
-      "ts": unix timestamp,
-      "senderId": str
-    }
-  }
-  ```
-
-### Information Flow
-1. Event received from Firebase RTDB listener
-2. Event parsed into `AffectiveEvent` object
-3. Affective state of participant updated (running emotional state across modalities)
-4. Decision point: Check if active window exists
-
-### State Updates
-- `EventManager.affective_states[session_id/participant_id]` updated with new emotion activations
-- Running states use exponential moving average: `0.5 * old + 0.5 * new`
-- Dominant emotions extracted (threshold: 0.6 activation)
-
----
-
-## Stage 2: Is Interesting? (Fast Gating)
-
-**Location**: `AffectiveMediator.is_interesting()`
-
-### Context Window
-- **Model**: Fast gating model (`gating_model`)
-- **Input Messages**:
-  1. System prompt: `is_interesting_prompt.txt`
-  2. Human message: Last message content from discussion
-     ```python
-     f"User {participant_id} sent: {message_content}"
-     ```
-
-### Information Flow
-- **Trigger**: New text event with no active window
-- **Input**:
-  ```python
-  {
-    "discussion_id": unique discussion id,
-    "event": {
-      "event_id": str,
-      "participant_id": str,
-      "timestamp": ISO8601 string,
-      "modality": "text" | "vision" | "audio",
-      "emotion_activations": [...],
-      "payload": {
-        "content": str
-        "session_id": str
-        }
-    }
-  }
-  ```
-- **Graph State Initialization** (if first event):
-  - `discussion_id`: session_id
-  - `topic`: topicId (from meta)
-  - `condition`: condition (from meta)
-  - `messages`: [event.to_human_message()]
-
-### Decision Output
-- **Type**: `IsInterestingDecision`
-- **Fields**:
-  - `is_interesting`: bool
-  - `reason`: Optional[str]
-
-### Routing
-- `is_interesting == True` → Continue to "affective_window" node
-- `is_interesting == False` → END (no window created)
-
----
-
-## Stage 3: Affective Window Creation & Management
-
-**Location**: `EventManager` (window creation) + `AffectiveMediator.affective_window()` (placeholder)
-
-### Context Window
-- **Window Structure**: `AffectiveWindow`
-  ```python
-  {
-    "window_id": UUID,
-    "discussion_id": str,
-    "first_message": HumanMessage,
-    "all_messages": List[HumanMessage],  # accumulates during window lifetime
-    "start_time": datetime,
-    "expiration_time": datetime,  # start_time + lifespan (default: 5 seconds)
-    "affective_states": List[AffectiveState],  # snapshot at window creation
-    "last_update": datetime
-  }
-  ```
-
-### Information Flow
-1. **Window Creation** (when `is_interesting == True`):
-   - Creates new `AffectiveWindow` with:
-     - First message: triggering event
-     - Affective states: snapshot of all participants' current states
-     - Default lifespan: 5 seconds (configurable)
-   
-2. **Window Updates** (while active):
-   - New events added to `all_messages` (if text modality)
-   - `last_update` timestamp refreshed
-   - Window stored in `EventManager.windows[session_id]`
-
-3. **Window Expiration Check**:
-   - On each new event, check if `datetime.now() >= expiration_time`
-   - If expired: window sent to mediator for intervention decision
-
-### State Management
-- Windows stored in-memory: `EventManager.windows[session_id]`
-- Only one active window per session at a time
-- Windows cannot overlap in time or content
-
----
-
-## Stage 4: Should Intervene? (Reasoning Decision)
-
-**Location**: `AffectiveMediator.should_intervene()`
-
-### Context Window
-- **Model**: Reasoning model (`reasoning_model`)
-- **Input Messages**:
-  1. System prompt: `should_intervene_prompt.txt`
-  2. All messages in window: `window.all_messages` (HumanMessage objects)
-  3. Group affective state report: `window.to_model_context()` (SystemMessage)
-     - Time range of window
-     - Top 5 emotions observed in group
-     - Distribution of dominant emotions across participants
-     - Per-participant breakdown of dominant emotions
-
-### Information Flow
-1. **State Update** (time-travel style):
-   ```python
-   new_values = window.to_graph_state(exclude_first_message=True)
-   # Sets: {"last_affective_window": window}
-   ```
-   - Graph state updated with window at "affective_window" node
-   
-2. **Cooldown Check**:
-   - If `last_intervention_time` exists and within cooldown period → skip decision
-   - Returns: `ShouldInterveneDecision(should_intervene=False, reason="<COOLDOWN_PERIOD_ACTIVE>")`
-
-3. **Window Validation**:
-   - If `last_affective_window` is None → skip decision
-   - Returns: `ShouldInterveneDecision(should_intervene=False, reason=NO_AFFECTIVE_WINDOW_RECEIVED_TOKEN)`
-
-4. **Model Reasoning**:
-   - Model receives:
-     - System prompt with intervention guidelines
-     - All messages in the window (chronological sequence)
-     - Aggregated group affective state report
-
-### Group Affective State Report Structure
-```python
-"""
-### Group Affective State Report
-
-Time range: {start_time} - {expiration_time}:
-
-Top 5 emotions observed in the group: **{top_group_emotions}**
-
-Distribution of dominant emotions across the participants: {distribution}
-
-#### Participant Breakdown:
-
-*  {participant_1_affective_summary}
-*  {participant_2_affective_summary}
-...
-"""
+User types message
+  → POST /chat/message (FastAPI)
+    → Firebase RTDB write (Admin SDK)
+    → asyncio.create_task → mediator.process_new_message()
+      → if should_intervene → Firebase RTDB write (CHARLIE's response)
+  ← Firebase RTDB onValue subscription → UI updates for all connected clients
 ```
 
-### Decision Output
-- **Type**: `ShouldInterveneDecision`
-- **Fields**:
-  - `should_intervene`: bool
-  - `intervention_message`: Optional[str] (if should_intervene == True)
-  - `reason`: Optional[str]
+## Design
 
-### State Updates
-- `last_intervention_decision`: ShouldInterveneDecision
-- `messages`: Full message sequence sent to model (for logging/debugging)
+- **Two automatic themes** based on time of day: day (6am–8pm) and night (8pm–6am). No manual toggle.
+  - Day: warm off-white (`#f7f7f4`), muted sage green accents
+  - Night: dark charcoal (`#1a1a1a`, Cursor Dark-inspired), desaturated sage accents
+- **Font**: Fraunces (serif) — chosen for its warmth and human quality, deliberately departing from the sans-serif AI product aesthetic.
+- **Message types**:
+  - `user` — standard chat bubble, right-aligned for self
+  - `mediator` — distinct sage-tinted bubble, left-aligned with CHARLIE label
+  - `join` — quiet centered divider line: `——— name joined ———`
+- Scrollbar hidden, custom ease-out-quart scroll animation on new messages.
 
-### Routing
-- `should_intervene == True` → Continue to "intervene" node
-- `should_intervene == False` → END
+## Infrastructure
 
----
+- **Backend**: Render Web Service (Python 3.11), `uvicorn app:app --host 0.0.0.0 --port $PORT`
+- **Frontend**: Render Static Site, root `frontend/`, build `npm install && npm run build`, publish `dist/`
+- **Domain**: talktocharlie.io (Namecheap) → Render via ALIAS + CNAME records. SSL via Let's Encrypt (auto-provisioned by Render).
+- **Firebase RTDB rules**: public read on `v2/states/global/chat/messages`, no public writes.
 
-## Stage 5: Intervention
+## Key environment variables
 
-**Location**: `AffectiveMediator.send_intervention()` (placeholder) + `EventManager` (message writing)
+| Variable | Used by |
+|---|---|
+| `REDIS_HOST/PORT/USERNAME/PASSWORD` | LangGraph checkpointer, pub-sub |
+| `FIREBASE_URL` | Firebase Admin SDK |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase Admin SDK |
+| `STUDY_ID` | Firebase path prefix (`v2`) |
+| `OPENROUTER_API_KEY` | LLM calls via OpenRouter |
+| `DEFAULT_LLM` | Primary and summarization LLM model name |
+| `VITE_FIREBASE_*` | Frontend Firebase client |
+| `VITE_API_URL` | Frontend → backend URL |
 
-### Context Window
-- **Input**: Current graph state with `last_intervention_decision`
-- **Intervention Message**: `decision.intervention_message`
+## What's next
 
-### Information Flow
-1. **Message Creation**:
-   ```python
-   {
-     "id": UUID,
-     "content": decision.intervention_message,
-     "type": "mediator",
-     "senderId": "__mediator__",
-     "ts": current_timestamp
-   }
-   ```
-
-2. **Firebase Write**:
-   - Message written to: `/{study_id}/states/{session_id}/chat/messages/{message_id}`
-   - Appears in chat as mediator message
-
-3. **State Updates**:
-   - `last_intervention_time`: Current timestamp
-   - Cooldown period activated (prevents rapid successive interventions)
-
-### Cooldown Mechanism
-- Default cooldown: 30 seconds (configurable via `post_intervention_cooldown`)
-- Prevents mediator from intervening too frequently
-- Checked in `should_intervene()` before making decision
-
----
-
-## Graph State Schema
-
-**Location**: `GroupDiscussionState` (extends `AgentState`)
-
-### Persistent State Fields
-```python
-{
-  "discussion_id": str,
-  "topic": str,
-  "condition": "none" | "no_affect" | "affect",
-  "messages": List[AnyMessage],  # inherited from AgentState
-  "chat_summary": str,  # running summary (via SummarizationMiddleware)
-  "last_affective_window": Optional[AffectiveWindow],
-  "last_intervention_decision": ShouldInterveneDecision,
-  "last_intervention_time": Optional[datetime],
-  "post_intervention_cooldown": int  # default: 30 seconds
-}
-```
-
-### State Persistence
-- Uses LangGraph `MemorySaver` checkpointer (in-memory by default)
-- Thread ID = `discussion_id` (session_id)
-- State persists across multiple events in the same discussion
-
----
-
-## Middleware & Context Management
-
-### PIIMiddleware
-- **Purpose**: Redact personal information (e.g., emails)
-- **Strategy**: Redaction
-- **Applied**: To all messages in the agent workflow
-
-### SummarizationMiddleware
-- **Purpose**: Maintain running summary of chat to manage context window
-- **Model**: Fast model (`gating_model`)
-- **Trigger**: When messages exceed `max_tokens_before_summary` (1000 tokens)
-- **Effect**: Older messages summarized, reducing token usage
-
----
-
-## Key Data Structures
-
-### AffectiveEvent
-- Represents a single event with emotion annotations
-- Contains: event_id, participant_id, timestamp, modality, emotion_activations, payload
-- Can convert to `HumanMessage` for LLM consumption
-
-### AffectiveState
-- Tracks participant's emotional state across modalities (text, vision, audio)
-- Maintains running states per modality (exponential moving average)
-- Extracts dominant emotions (threshold: 0.6)
-- Updates with each new event from that participant
-
-### AffectiveWindow
-- Temporal window capturing messages and affective states
-- Default lifespan: 5 seconds
-- Aggregates individual states into group affective state
-- Provides rich context for intervention decisions
-
----
-
-## Information Flow Summary
-
-```
-Firebase RTDB Event
-    ↓
-EventManager.handle_new_event()
-    ↓
-Update AffectiveState (participant)
-    ↓
-[Active Window Exists?]
-    ├─ Yes → Add event to window
-    │         ↓
-    │    [Window Expired?]
-    │         ├─ Yes → Send to mediator (should_intervene)
-    │         └─ No → Return
-    │
-    └─ No → [Event is text?]
-              ├─ Yes → Send to mediator (is_interesting)
-              │         ↓
-              │    [Is Interesting?]
-              │         ├─ Yes → Create AffectiveWindow
-              │         └─ No → Return
-              └─ No → Return
-
-[Should Intervene?]
-    ├─ Yes → Write intervention message to Firebase
-    └─ No → Return
-```
-
----
-
-## Context Window Sizes
-
-| Stage | Model | Input Size | Notes |
-|-------|-------|------------|-------|
-| Is Interesting | Fast (gating) | ~1 message + system prompt | Single message evaluation |
-| Should Intervene | Reasoning | Variable (window size) | All messages in window + group state report |
-| Intervention | N/A | Decision object only | No model call, just message writing |
-
-### Token Management
-- SummarizationMiddleware prevents unbounded growth
-- Window-based approach limits temporal scope
-- Group state report provides compact summary of affective information
-
----
-
-## Notes
-
-- Windows are non-overlapping and sequential
-- Only one active window per session
-- Cooldown period prevents intervention spam
-- State persists across events via LangGraph checkpointer
-- Affective states are continuously updated, not just at window creation
-
+- Agent personality tuning (possible GPT-4o-mini fine-tune)
+- Richer landing page / onboarding that sets tone for CHARLIE's purpose
+- UI polish: header identity, CHARLIE avatar, landing page copy
