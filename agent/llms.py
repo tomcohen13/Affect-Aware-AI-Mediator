@@ -49,4 +49,4 @@ async def call_model_async(
     if output_type is None:
         return await model.ainvoke(input=messages)
     else:
-        return await model.with_structured_output(output_type).ainvoke(input=messages)
+        return await model.with_structured_output(output_type, strict=False).ainvoke(input=messages)

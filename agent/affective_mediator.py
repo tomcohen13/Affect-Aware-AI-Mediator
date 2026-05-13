@@ -48,7 +48,7 @@ class AffectiveMediator:
 
         self.agent = None
         
-        self.llm: BaseChatModel = llm
+        self.llm: BaseChatModel = llm.with_structured_output(ShouldInterveneDecision),
         self.summarization_llm = summarization_llm
         
         self.logger: logging.Logger = logger # TODO: add StdOut as default?
