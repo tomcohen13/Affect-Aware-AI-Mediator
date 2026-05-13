@@ -6,7 +6,7 @@ import sys
 import uvicorn
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -50,9 +50,15 @@ GLOBAL_SESSION_ID = os.getenv("GLOBAL_SESSION_ID", "global")
 class ChatMessageRequest(PydanticBaseModel):
     participant_id: str
     content: str
+    session_id: str | None = None
 
 class ChatJoinRequest(PydanticBaseModel):
     participant_id: str
+    session_id: str | None = None
+
+class ChatLeaveRequest(PydanticBaseModel):
+    participant_id: str
+    session_id: str | None = None
 
 
 # Define app middleware
@@ -138,6 +144,13 @@ app.add_middleware(CORSMiddleware, allow_origins=[
 ], allow_methods=["*"], allow_headers=["*"])
 
 
+def _valid_sessions() -> set[str]:
+    extra = os.getenv("VALID_SESSIONS", "")
+    sessions = {s.strip() for s in extra.split(",") if s.strip()}
+    sessions.add(GLOBAL_SESSION_ID)
+    return sessions
+
+
 # Health check endpoints
 @app.get("/health")
 async def health_check():
@@ -145,6 +158,14 @@ async def health_check():
         "status": "healthy",
         "event_manager": "running" if event_manager else "stopped"
     }
+
+
+@app.get("/session/{code}", status_code=status.HTTP_200_OK)
+async def validate_session(code: str, response: Response):
+    if code not in _valid_sessions():
+        response.status_code = status.HTTP_404_NOT_FOUND
+        return {"valid": False}
+    return {"valid": True}
 
 
 async def _process_and_maybe_intervene(content: str):
@@ -168,8 +189,24 @@ async def user_joined(msg: ChatJoinRequest):
     from firebase_admin import db
     from agent.utils import create_raw_message
 
+    session = msg.session_id or GLOBAL_SESSION_ID
     raw = create_raw_message(content=msg.participant_id, type="join", sender_id=msg.participant_id)
-    db.reference(f"{os.getenv('STUDY_ID')}/states/{GLOBAL_SESSION_ID}/chat/messages/{raw['id']}").set(raw)
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
+    return {"status": "ok"}
+
+
+@app.post("/chat/leave", status_code=status.HTTP_200_OK)
+async def user_left(request: Request):
+    import json
+    from firebase_admin import db
+    from agent.utils import create_raw_message
+
+    data = json.loads(await request.body())
+    participant_id = data.get("participant_id", "")
+    session = data.get("session_id") or GLOBAL_SESSION_ID
+    raw = create_raw_message(content=participant_id, type="leave", sender_id=participant_id)
+    logger.info(f"Leave event: participant={participant_id!r}, session={session!r}, stored type={raw['type']!r}")
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
     return {"status": "ok"}
 
 
@@ -178,8 +215,9 @@ async def send_chat_message(msg: ChatMessageRequest):
     from firebase_admin import db
     from agent.utils import create_raw_message
 
+    session = msg.session_id or GLOBAL_SESSION_ID
     raw = create_raw_message(content=msg.content, type="user", sender_id=msg.participant_id)
-    db.reference(f"{os.getenv('STUDY_ID')}/states/{GLOBAL_SESSION_ID}/chat/messages/{raw['id']}").set(raw)
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
 
     asyncio.create_task(_process_and_maybe_intervene(msg.content))
     return {"status": "ok", "message_id": raw["id"]}

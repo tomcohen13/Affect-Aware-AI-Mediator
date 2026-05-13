@@ -6,6 +6,7 @@ from langchain.agents.middleware import (
     PIIMiddleware,  # we'll definitely need that for redacting personal information
     SummarizationMiddleware,  # could be good for the agent to hold a running summary of chat as opposed to all messages
 )
+from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from langchain.chat_models.base import BaseChatModel
@@ -73,11 +74,12 @@ class AffectiveMediator:
             model=self.llm,
             tools=[],
             middleware=[
+                AnthropicPromptCachingMiddleware(ttl="1h"),
                 PIIMiddleware(pii_type='email', strategy='redact'),
                 SummarizationMiddleware(
                     model=self.summarization_llm,
-                    max_tokens_before_summary=1000,
-                    messages_to_keep=3,
+                    keep=("messages", 8),
+                    trigger=("tokens", 3000),
                 ),
             ],
             system_prompt=self.should_intervene_prompt, # TODO: implement dynamic prompt: https://docs.langchain.com/oss/python/concepts/context
