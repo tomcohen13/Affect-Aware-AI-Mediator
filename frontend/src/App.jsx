@@ -27,7 +27,7 @@ const theme = isDay ? {
   timestamp:     'text-[#b8b8b0]',
   inputBorder:   'border-[#e0e0dc]',
   input:         'bg-white text-[#1a1a18] placeholder-[#b8b8b0] focus:ring-[#5a6e5e]/30',
-  sendBtn:       'bg-[#5a6e5e] hover:bg-[#4a5e4e] disabled:opacity-40 text-white',
+  sendBtn:       'bg-[#d08a2e] hover:bg-[#bc7a22] disabled:opacity-40 text-white cursor-pointer',
 } : {
   page:          'bg-[#1a1a1a] text-[#d4d4d0]',
   headerBorder:  'border-white/10',
@@ -42,7 +42,7 @@ const theme = isDay ? {
   timestamp:     'text-[#404040]',
   inputBorder:   'border-white/10',
   input:         'bg-[#242424] text-[#d4d4d0] placeholder-[#4e4e4a] focus:ring-[#6e8878]/40',
-  sendBtn:       'bg-[#4a5e4e] hover:bg-[#3a4e3e] disabled:opacity-40 text-white',
+  sendBtn:       'bg-[#4a5a90] hover:bg-[#3a4a80] disabled:opacity-40 text-white cursor-pointer',
 }
 
 function renderContent(text, mentionColor) {
@@ -145,8 +145,8 @@ export default function App() {
       <div className={`flex items-center justify-center min-h-screen relative ${theme.page}`}>
         <SkyBackground isDay={isDay} />
         <form onSubmit={saveName} className={`relative z-10 flex flex-col gap-4 w-80 p-8 rounded-2xl ${isDay ? 'bg-white/30' : 'bg-black/45'}`}>
-          <h1 className="text-2xl font-semibold text-center">Talk to CHARLIE</h1>
-          <p className={`text-sm text-center ${theme.subtext}`}>Enter a name to join the conversation</p>
+          <h1 className="text-3xl font-semibold text-center">Talk to CHARLIE</h1>
+          <p className={`text-base text-center ${theme.subtext}`}>Enter a name to join the conversation</p>
           <input
             autoFocus
             className={`rounded-xl px-4 py-3 outline-none focus:ring-2 border ${theme.input} ${theme.inputBorder}`}
@@ -170,7 +170,7 @@ export default function App() {
         <div className="w-8 h-8 flex items-center justify-center text-2xl">🤠</div>
         <div>
           <p className={`font-semibold leading-none ${theme.headerName}`}>charlie</p>
-          <p className={`text-xs ${theme.subtext}`}>#{SESSION_ID}</p>
+          <p className={`text-sm ${theme.subtext}`}>#{SESSION_ID}</p>
         </div>
       </div>
 
@@ -180,7 +180,7 @@ export default function App() {
             return (
               <div key={msg.id} className="flex items-center gap-3 py-1">
                 <div className={`flex-1 h-px ${theme.headerBorder}`} />
-                <span className={`text-xs ${theme.subtext}`}>{msg.content} joined</span>
+                <span className={`text-sm ${theme.subtext}`}>{msg.content} joined</span>
                 <div className={`flex-1 h-px ${theme.headerBorder}`} />
               </div>
             )
@@ -190,16 +190,16 @@ export default function App() {
           return (
             <div key={msg.id} className={`flex flex-col gap-1 ${isMe ? 'items-end' : 'items-start'}`}>
               {!isMe && (
-                <span className={`text-xs font-medium ${isCharlie ? theme.charlieName : theme.otherName}`}>
+                <span className={`text-sm font-medium ${isCharlie ? theme.charlieName : theme.otherName}`}>
                   {isCharlie ? 'CHARLIE' : msg.senderId}
                 </span>
               )}
-              <div className={`px-4 py-2.5 rounded-2xl max-w-sm text-sm leading-relaxed ${
+              <div className={`px-4 py-2.5 rounded-2xl max-w-sm text-base leading-relaxed ${
                 isCharlie ? theme.charlieBubble : isMe ? theme.myBubble : theme.otherBubble
               }`}>
                 {renderContent(msg.content, theme.charlieName.match(/#[0-9a-f]+/i)?.[0])}
               </div>
-              <span className={`text-xs ${theme.timestamp}`}>{formatTime(msg.ts)}</span>
+              <span className={`text-sm ${theme.timestamp}`}>{formatTime(msg.ts)}</span>
             </div>
           )
         })}
@@ -208,7 +208,7 @@ export default function App() {
 
 <form onSubmit={sendMessage} className={`flex gap-2 px-4 py-4 border-t ${theme.inputBorder}`}>
         <input
-          className={`flex-1 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 border ${theme.input} ${theme.inputBorder}`}
+          className={`flex-1 rounded-xl px-4 py-3 text-base outline-none focus:ring-2 border ${theme.input} ${theme.inputBorder}`}
           placeholder="Say something..."
           value={input}
           onChange={e => setInput(e.target.value)}
@@ -217,9 +217,11 @@ export default function App() {
         <button
           type="submit"
           disabled={sending || !input.trim()}
-          className={`rounded-xl px-5 py-3 text-sm font-medium transition-colors ${theme.sendBtn}`}
+          className={`rounded-xl px-5 py-3 text-base font-medium transition-colors ${theme.sendBtn}`}
         >
-          Send
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 -rotate-90">
+            <path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405Z" />
+          </svg>
         </button>
       </form>
     </div>
