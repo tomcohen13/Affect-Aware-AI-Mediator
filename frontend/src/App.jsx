@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { db } from './firebase'
 import { ref, onValue, query, orderByKey, limitToLast } from 'firebase/database'
+import SkyBackground from './SkyBackground'
 
 const STUDY_ID = 'v2'
-const SESSION_ID = 'global'
+const SESSION_ID = import.meta.env.VITE_SESSION_ID || 'global'
 const MESSAGES_PATH = `${STUDY_ID}/states/${SESSION_ID}/chat/messages`
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const hour = new Date().getHours()
-let isDay = hour >= 6 && hour < 20
+let isDay = hour >= 6 && hour < 21
 if (new URLSearchParams(window.location.search).get('theme') === 'day') isDay = true
 if (new URLSearchParams(window.location.search).get('theme') === 'night') isDay = false
 
@@ -16,10 +17,11 @@ const theme = isDay ? {
   page:          'bg-[#f7f7f4] text-[#1a1a18]',
   headerBorder:  'border-[#e0e0dc]',
   subtext:       'text-[#909088]',
+  headerName:    'text-[#d4d4d0]',
   avatar:        'bg-[#5a6e5e]',
   charlieName:   'text-[#5a6e5e]',
   charlieBubble: 'bg-[#eceee9] border border-[#cdd4c8] text-[#1a1a18]',
-  myBubble:      'bg-[#282828] text-white',
+  myBubble:      'bg-[#dbeeff] border border-[#a8d4f5] text-[#1a3050]',
   otherBubble:   'bg-white border border-[#e0e0dc] text-[#1a1a18]',
   otherName:     'text-[#909088]',
   timestamp:     'text-[#b8b8b0]',
@@ -30,6 +32,7 @@ const theme = isDay ? {
   page:          'bg-[#1a1a1a] text-[#d4d4d0]',
   headerBorder:  'border-white/10',
   subtext:       'text-[#6e6e6a]',
+  headerName:    'text-[#d4d4d0]',
   avatar:        'bg-[#6e8878]',
   charlieName:   'text-[#7a9882]',
   charlieBubble: 'bg-[#212121] border border-[#6e8878]/30 text-[#c4d4c8]',
@@ -40,6 +43,15 @@ const theme = isDay ? {
   inputBorder:   'border-white/10',
   input:         'bg-[#242424] text-[#d4d4d0] placeholder-[#4e4e4a] focus:ring-[#6e8878]/40',
   sendBtn:       'bg-[#4a5e4e] hover:bg-[#3a4e3e] disabled:opacity-40 text-white',
+}
+
+function renderContent(text, mentionColor) {
+  const parts = text.split(/(@charlie)/gi)
+  return parts.map((part, i) =>
+    /^@charlie$/i.test(part)
+      ? <strong key={i} style={{ color: mentionColor }}>{part}</strong>
+      : part
+  )
 }
 
 function formatTime(ts) {
@@ -130,8 +142,9 @@ export default function App() {
 
   if (!nameSet) {
     return (
-      <div className={`flex items-center justify-center min-h-screen ${theme.page}`}>
-        <form onSubmit={saveName} className="flex flex-col gap-4 w-80">
+      <div className={`flex items-center justify-center min-h-screen relative ${theme.page}`}>
+        <SkyBackground isDay={isDay} />
+        <form onSubmit={saveName} className={`relative z-10 flex flex-col gap-4 w-80 p-8 rounded-2xl ${isDay ? 'bg-white/30' : 'bg-black/45'}`}>
           <h1 className="text-2xl font-semibold text-center">Talk to CHARLIE</h1>
           <p className={`text-sm text-center ${theme.subtext}`}>Enter a name to join the conversation</p>
           <input
@@ -150,13 +163,14 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen ${theme.page}`}>
-    <div className={`flex flex-col h-screen max-w-2xl mx-auto border-x ${theme.headerBorder}`}>
-      <div className={`flex items-center gap-3 px-6 py-4 border-b ${theme.headerBorder}`}>
-        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white ${theme.avatar}`}>C</div>
+    <div className={`min-h-screen relative ${theme.page}`}>
+    <SkyBackground isDay={isDay} />
+    <div className={`relative z-10 flex flex-col h-screen max-w-2xl mx-auto border-x ${isDay ? 'bg-white/15 border-white/40' : 'bg-black/15 border-white/8'}`}>
+      <div className={`flex items-center gap-3 px-6 py-4  ${theme.headerBorder}`}>
+        <div className="w-8 h-8 flex items-center justify-center text-2xl">🤠</div>
         <div>
-          <p className="font-semibold leading-none">charlie</p>
-          <p className={`text-xs ${theme.subtext}`}>#global</p>
+          <p className={`font-semibold leading-none ${theme.headerName}`}>charlie</p>
+          <p className={`text-xs ${theme.subtext}`}>#{SESSION_ID}</p>
         </div>
       </div>
 
@@ -183,7 +197,7 @@ export default function App() {
               <div className={`px-4 py-2.5 rounded-2xl max-w-sm text-sm leading-relaxed ${
                 isCharlie ? theme.charlieBubble : isMe ? theme.myBubble : theme.otherBubble
               }`}>
-                {msg.content}
+                {renderContent(msg.content, theme.charlieName.match(/#[0-9a-f]+/i)?.[0])}
               </div>
               <span className={`text-xs ${theme.timestamp}`}>{formatTime(msg.ts)}</span>
             </div>

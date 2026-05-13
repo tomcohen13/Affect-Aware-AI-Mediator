@@ -44,7 +44,7 @@ checkpointer = None
 event_manager = None
 mediator = None
 
-GLOBAL_SESSION_ID = "global"
+GLOBAL_SESSION_ID = os.getenv("GLOBAL_SESSION_ID", "global")
 
 
 class ChatMessageRequest(PydanticBaseModel):
@@ -134,6 +134,7 @@ app.add_middleware(CORSMiddleware, allow_origins=[
     "https://affect-aware-ai-mediator.onrender.com",
     "https://talktocharlie.io",
     "https://www.talktocharlie.io",
+    "http://localhost:5173",
 ], allow_methods=["*"], allow_headers=["*"])
 
 

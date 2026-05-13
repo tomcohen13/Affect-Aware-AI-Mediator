@@ -56,7 +56,9 @@ def datetime_to_string(dt: datetime) -> str:
 
 def load_prompt(func: str) -> str:
     """Load the system prompt for the agent."""
-    with open(f"agent/prompts/{func}_prompt.txt", "r") as file:
+    from agent.prompts import PROMPT_REGISTRY
+    path_to_prompt = PROMPT_REGISTRY.get(func, "")
+    with open(path_to_prompt, "r") as file:
         prompt = file.read()
     return prompt
 
