@@ -130,7 +130,11 @@ async def lifespan(app: FastAPI):
 logger.info("Initializing AffectiveMediator application...")
 
 app = FastAPI(middleware=middleware, lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=[
+    "https://affect-aware-ai-mediator.onrender.com",
+    "https://talktocharlie.io",
+    "https://www.talktocharlie.io",
+], allow_methods=["*"], allow_headers=["*"])
 
 
 # Health check endpoints
