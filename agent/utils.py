@@ -123,6 +123,8 @@ def check_required_env_vars() -> None:
         "REDIS_PORT",
         "REDIS_USERNAME",
         "REDIS_PASSWORD",
+        "OPENROUTER_API_KEY",
+        "DEFAULT_LLM",
     ]
     
     missing = [var for var in required_env_vars if not os.getenv(var)]
