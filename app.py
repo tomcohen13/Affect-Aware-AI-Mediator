@@ -8,23 +8,25 @@ import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
 from fastapi.middleware import Middleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel as PydanticBaseModel
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from markdown_it import MarkdownIt
 from starlette.middleware.sessions import SessionMiddleware
-from agent.base_models import AffectiveEvent
-from agent.utils import check_required_env_vars
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from agent.affective_mediator import AffectiveMediator
-from agent.event_manager import EventManager
 
 from dotenv import load_dotenv
 load_dotenv()
 
 # Configure logging
 import logging
+
+from agent.affective_mediator import AffectiveMediator
+from agent.base_models import AffectiveEvent
+from agent.event_manager import EventManager
+from agent.utils import check_required_env_vars
 
 
 logging.basicConfig(
@@ -42,6 +44,16 @@ checkpointer = None
 event_manager = None
 mediator = None
 
+GLOBAL_SESSION_ID = "global"
+
+
+class ChatMessageRequest(PydanticBaseModel):
+    participant_id: str
+    content: str
+
+class ChatJoinRequest(PydanticBaseModel):
+    participant_id: str
+
 
 # Define app middleware
 middleware = [
@@ -56,6 +68,7 @@ middleware = [
 async def lifespan(app: FastAPI):
 
     global redis_client, checkpointer, event_manager, mediator
+    from agent.llms import primary_llm, summarization_llm   # or build them here
 
     try:
         check_required_env_vars()
@@ -65,7 +78,7 @@ async def lifespan(app: FastAPI):
 
     redis_client = redis.Redis(
         host=os.getenv('REDIS_HOST'),
-        port=os.getenv('REDIS_PORT'),
+        port=int(os.getenv('REDIS_PORT')),
         username=os.getenv('REDIS_USERNAME'),
         password=os.getenv('REDIS_PASSWORD'),
         decode_responses=True,
@@ -87,6 +100,8 @@ async def lifespan(app: FastAPI):
 
     mediator = AffectiveMediator(
         checkpointer=checkpointer,
+        llm=primary_llm,
+        summarization_llm=summarization_llm,
         logger=logger,
     )
 
@@ -115,6 +130,7 @@ async def lifespan(app: FastAPI):
 logger.info("Initializing AffectiveMediator application...")
 
 app = FastAPI(middleware=middleware, lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 # Health check endpoints
@@ -122,8 +138,46 @@ app = FastAPI(middleware=middleware, lifespan=lifespan)
 async def health_check():
     return {
         "status": "healthy",
-        "event_manager": "running" if event_manager._listener else "stopped"
+        "event_manager": "running" if event_manager else "stopped"
     }
+
+
+async def _process_and_maybe_intervene(content: str):
+    try:
+        decision = await mediator.process_new_message(
+            discussion_id=GLOBAL_SESSION_ID,
+            new_message=content,
+            window=None,
+        )
+        if decision.should_intervene:
+            event_manager.post_message_to_session(
+                content=decision.response,
+                session_id=GLOBAL_SESSION_ID,
+            )
+    except Exception as e:
+        logger.error(f"Mediator error: {e}", exc_info=True)
+
+
+@app.post("/chat/join", status_code=status.HTTP_201_CREATED)
+async def user_joined(msg: ChatJoinRequest):
+    from firebase_admin import db
+    from agent.utils import create_raw_message
+
+    raw = create_raw_message(content=msg.participant_id, type="join", sender_id=msg.participant_id)
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{GLOBAL_SESSION_ID}/chat/messages/{raw['id']}").set(raw)
+    return {"status": "ok"}
+
+
+@app.post("/chat/message", status_code=status.HTTP_201_CREATED)
+async def send_chat_message(msg: ChatMessageRequest):
+    from firebase_admin import db
+    from agent.utils import create_raw_message
+
+    raw = create_raw_message(content=msg.content, type="user", sender_id=msg.participant_id)
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{GLOBAL_SESSION_ID}/chat/messages/{raw['id']}").set(raw)
+
+    asyncio.create_task(_process_and_maybe_intervene(msg.content))
+    return {"status": "ok", "message_id": raw["id"]}
 
 
 @app.post("/event", status_code=status.HTTP_201_CREATED)
@@ -145,10 +199,14 @@ async def process_new_event(event: AffectiveEvent, response: Response):
 
     return {"status": "accepted", "event_id": idempotency_key}
 
-
-
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def index():
+    return "hello"
+
+
+
+@app.get("/about", response_class=HTMLResponse)
+async def about():
     """Display the agent context and flow documentation."""
     md_file_path = os.path.join(os.path.dirname(__file__), "README.md")
     try:

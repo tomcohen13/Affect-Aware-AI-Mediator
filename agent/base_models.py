@@ -40,15 +40,18 @@ class ShouldInterveneDecision(BaseModel):
     Output schema for determining if an intervention is needed.
     """
 
-    should_intervene: bool = Field(description="Whether an intervention is needed or not")
-    
-    intervention_message: Optional[str] = Field(
-        description="The intervention message to be sent, if applicable",
+    should_intervene: bool = Field(description="Whether to respond in the chat or not")
+    response: str = Field(
+        description="The message to be sent back to the chat, if applicable",
         default="",
     )
-    reason: Optional[str] = Field(
-        description="Optional reason why an intervention is needed",
-        default=None,
+    in_response_to: str = Field(
+        description="If applicable, a specific message ID the agent responds to",
+        default=""
+    )
+    note: str = Field(
+        description="If applicable, a note to future self regarding the current state",
+        default=""
     )
 
 # =============================================================================
@@ -139,7 +142,14 @@ class EmotionAnnotation(BaseModel):
         return NotImplemented
 
 
-class AffectiveEvent(BaseModel):
+class Event(BaseModel):
+    """Base event model"""
+    event_id: str = Field(description="unique identifier of the event")
+    session_id: str = Field(description="unique session/discussion ID of event")
+    timestamp: datetime = Field(description="timestamp of event occurrence")
+    payload: Dict = Field(description="associated raw data", default={})
+
+class AffectiveEvent(Event):
     """
     Output from an emotion recognition model, per modality, with associated payload.
 
@@ -148,26 +158,16 @@ class AffectiveEvent(BaseModel):
         "content": str
         "session_id": str
     }
-
-
     """
-
-    event_id: str = Field(description="unique identifier of the event")
-    participant_id: str = Field(description="unique ID of participant generating the event")
-    session_id: str = Field(description="unique session/discussion ID of event")
-        
-    timestamp: datetime = Field(description="timestamp of event occurrence")
     
+    participant_id: str = Field(description="unique ID of participant generating the event")
     modality: Literal["vision", "audio", "text"] = Field(description="Modality of input data")
-
     emotion_activations: List[EmotionAnnotation] = Field(
         default=[],  # should generally be populated, but optional in case Hume API fails
         # min_length=len(HUME_EMOTIONS_LIST_VISION_AUDIO),
         max_length=len(HUME_EMOTIONS_LIST_TEXT),
         description="Array of all emotions with corresponding activations",
     )
-
-    payload: Dict = Field(description="associated raw data", default={})
 
 
     def to_human_message(self) -> HumanMessage:

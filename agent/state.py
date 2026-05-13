@@ -1,7 +1,8 @@
 """Execution graph states for the affective mediator agent."""
 
+import operator
 from datetime import datetime
-from typing import Dict, Literal, NotRequired, Optional
+from typing import Dict, Literal, NotRequired, Optional, Annotated, List
 from langchain.agents import AgentState
 from pydantic import Field
 
@@ -30,14 +31,12 @@ class GroupDiscussionState(AgentState):
 
     last_message: Optional[str]
 
-    last_is_interesting_decision: Optional[IsInterestingDecision]
-
     last_affective_window: Optional[AffectiveWindow]
 
     last_intervention_decision: Optional[ShouldInterveneDecision]
 
-    last_intervention_time: Optional[datetime]
-
-    post_intervention_cooldown: int # TODO: move this to constants
+    notes: Annotated[List[str], operator.add]
 
     started_discussion: bool
+
+    start_time: datetime

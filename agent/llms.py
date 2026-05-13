@@ -12,27 +12,27 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-GATING_MODEL_NAME = "google/gemini-2.5-flash"
+# GATING_MODEL_NAME = "google/gemini-2.5-flash"
 # REASONING_MODEL_NAME = "google/gemini-3-pro-preview"
-REASONING_MODEL_NAME = "openai/gpt-5.1-chat"
+# REASONING_MODEL_NAME = "openai/gpt-5.1-chat"
 
 
-gating_model = ChatOpenAI(
+summarization_llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1", # OpenRouter base URL
     api_key=os.getenv("OPENROUTER_API_KEY"), # OpenRouter API key from environment variable
-    model=GATING_MODEL_NAME,
+    model=os.getenv("SUMMARIZATION_LLM", os.getenv("DEFAULT_LLM")),
     temperature=0.0,
     max_retries=3,
-    timeout=4.0,
+    timeout=10.0,
 )
 
-reasoning_model = ChatOpenAI(
+primary_llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1", # OpenRouter base URL
     api_key=os.getenv("OPENROUTER_API_KEY"), # OpenRouter API key from environment variable
-    model=REASONING_MODEL_NAME,
-    temperature=0.7,
+    model=os.getenv("DEFAULT_LLM"),
+    temperature=0.5,
     max_retries=2,
-    timeout=8.0,
+    timeout=10.0,
 )
 
 

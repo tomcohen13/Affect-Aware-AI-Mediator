@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 import redis  # TODO: replace in-memory windows with redis
 from datetime import datetime
@@ -76,7 +77,6 @@ class EventManager:
             firebase_admin.initialize_app(cred, {"databaseURL": firebase_url})
 
 
-
     async def start(self):
         """Start EventManager, lister on new events from Redis Pubsub."""
         try:
@@ -130,7 +130,7 @@ class EventManager:
         """
         Called for each new AffectiveEvent.
 
-        ev schema (from frontend / base_models.AffectiveEvent):
+        event schema (from frontend / base_models.AffectiveEvent):
         {
           "event_id": str,
           "participant_id": str,
@@ -138,8 +138,7 @@ class EventManager:
           "modality": "text" | "vision" | "audio",
           "emotion_activations": [...],
           "payload": {
-            content: str
-            session_id: str
+                ...
             }
         }
         """
@@ -148,7 +147,7 @@ class EventManager:
             return
 
         # TODO: make that entire thing into different API endpoint for starting discussion?
-        if event.get("text", "") == CONVERSATION_STARTED_TOKEN:
+        if event.payload.get("text") == CONVERSATION_STARTED_TOKEN:
             # synthesize initial message from initial responses and send in chat
             self.logger.info(f"Conversation started! session id: {event.session_id}")
 
@@ -161,7 +160,7 @@ class EventManager:
                 in session_data.get('initial_responses', {}).items()
             }
 
-            response: str = await self.mediator.start_discussion(
+            response: AIMessage = await self.mediator.start_discussion(
                 discussion_id=event.session_id,
                 initial_responses=initial_responses,
                 topic_id=metadata.get('topicId'),
@@ -169,10 +168,11 @@ class EventManager:
             )
 
             # create new message in chat
-            self.post_message_to_session(
-                content=response,
-                session_id=event.session_id
-            )
+            if response:
+                self.post_message_to_session(
+                    content=response.content,
+                    session_id=event.session_id
+                )
             return
         
         self.logger.info(
@@ -185,86 +185,62 @@ class EventManager:
 
         # update participant state in background
         asyncio.create_task(self._update_affective_state_of_participant(event=event))
+                
+        if event.modality == "text":
 
+            # TODO: expand it for more nonsensical stuff
+            if event.payload.get("content", "").strip() == "":
+                return
+
+            decision: ShouldInterveneDecision = await self.mediator.process_new_message(
+                discussion_id=event.session_id,
+                new_message=event.payload["content"],
+                window=None, # TODO, integrate window back
+            )
+            self.logger.info(f"mediator decided: {decision}")
+            if decision.should_intervene:
+                try:
+                    self.post_message_to_session(
+                        content=decision.response,
+                        session_id=event.session_id,
+                    )
+                except Exception as e:
+                    self.logger.error(f"Couldn't write message to DB: {e}")
+        
+            try:
+                self.write_decision_to_db(
+                    session_id=event.session_id,
+                    decision=decision,
+                    window=None,  # TODO: again, find how to integrate window
+                )
+            except Exception as e:
+                self.logger.error(f"Couldn't write decision {decision} to DB: {e}")
+        
         # 2. check for existing window
         window_id = redis_key(type="window", session_id=event.session_id)
 
-        if (window := await self.redis_client.hgetall(window_id)) != {}:
-            window = AffectiveWindow.model_validate(window)
-            if not window.is_expired():
-                # active window exists, add event and move on to next event
-                window.add_event(event=event)
-                return
+        expiration = await self.redis_client.hget(f"{window_id}:meta", "expiration_time")
+        if expiration and datetime.now().isoformat() >= expiration:
+            # SEND AS MESSAGE/REPORT TO AGENT OTHERWISE CONTINUE AS USUAL
+            # Write as snapshot to DB
+            # reset expiration
+            self._reset_window()
+            pass
             
-            else:
-                # Window expired, clear out from session and send to model
-                await self.redis_client.hdel(window_id)
-                # TODO: mediator to pull actual windows given keys found in window
-                last_update = await self.mediator.run(window, pathway='should_intervene')
-                decision: ShouldInterveneDecision = last_update['should_intervene']['last_intervention_decision']
-                if decision.should_intervene:
-                    try:
-                        self.post_message_to_session(
-                            content=decision['intervention_message'],
-                            session_id=event.session_id,
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Couldn't write message to DB: {e}")
-                
-                # regardless, update 'charlie' path in DB with window
-                try:
-                    self.write_decision_to_db(
-                        session_id=event.session_id,
-                        decision=decision,
-                        window=window,
-                    )
-                except Exception as e:
-                    self.logger.error(f"Couldn't right decision {decision} to DB: {e}")
+        else:
+            # active window exists, add event and move on to next event
+            if event.modality == "text":
+                await self.redis_client.rpush(f"{window_id}:messages", event.payload.get("content"))
+            await self.redis_client.hset(f"{window_id}:meta", "last_update", datetime.now().isoformat())
 
-        if event.modality == "text":
-            # No active window
-            decision: IsInterestingDecision = await self.mediator.run(
-                input={"discussion_id": event.session_id, "event": event},
-                pathway="is_interesting",
-            )
-            
-            if decision.is_interesting:
-                # TODO: should be separate function
-                self.logger.info(f"[EM] Starting affective window for session: {event.session_id}")
-                affective_states_keys = list(
-                    await self.redis_client.scan_iter(redis_key(type="affective_state", session_id=event.session_id))
-                )
-                await self.redis_client.hset(
-                    name=redis_key(type="window", session_id=event.session_id),
-                    mapping=AffectiveWindow.create(
-                        discussion_id=event.session_id,
-                        first_message=event.to_human_message(),
-                        affective_states=affective_states_keys,  # link to current states
-                        lifespan=AFFECTIVE_WINDOW_DEFAULT_LIFESPAN,
-                    ).model_dump(),
-                )
-            else:
-                self.logger.info(f"[AGENT] message: {event.payload['content']} | Decision: do NOT trigger a window.")
-
-            # write decision to DB
-            # TODO: move all paths to a path generator function for consistecy!
-            path = f"{self.study_id}/states/{event.session_id}/charlie/{int(datetime.now().timestamp())}-is_interesting"
-            payload = {
-                "message": event.payload,
-                "decision": decision.model_dump()
-            }
-            try:
-                db.reference(path).set(payload)  
-            except Exception as e:
-                self.logger.error(f"Could not write decision to RTDB: {e}")
-            return
-
+    def _reset_window(self):
+        pass
 
     def write_decision_to_db(
         self,
         session_id: str,
         decision: ShouldInterveneDecision,
-        window: AffectiveWindow,
+        window: AffectiveWindow | None,
     ) -> None:
         
         path = f"{self.study_id}/states/{session_id}/charlie/{int(datetime.now().timestamp())}-should_intervene"
@@ -273,8 +249,8 @@ class EventManager:
             {
                 'context': {
                     'trigger': window.first_message.content,
-                    'window': window.to_system_message().content,
-                },
+                    'window': window.to_system_message().content if window else "",
+                } if window else {},  # TODO: integrate window once decided on initialization
                 'decision': decision.model_dump(),
             }
         )

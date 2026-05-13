@@ -119,7 +119,11 @@ def check_required_env_vars() -> None:
         "FIREBASE_URL",
         "STUDY_ID",
         "FIREBASE_SERVICE_ACCOUNT_JSON",
-    ]  # TODO: add all
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_USERNAME",
+        "REDIS_PASSWORD",
+    ]
     
     missing = [var for var in required_env_vars if not os.getenv(var)]
 
