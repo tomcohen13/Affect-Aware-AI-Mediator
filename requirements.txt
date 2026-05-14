@@ -48,7 +48,6 @@ httpcore==1.0.9
 httptools==0.7.1
 httpx==0.28.1
 humanfriendly==10.0
-hume==0.13.4
 hyperframe==6.1.0
 idna==3.11
 iniconfig==2.3.0
