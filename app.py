@@ -43,6 +43,7 @@ redis_client = None
 checkpointer = None
 event_manager = None
 mediator = None
+_background_tasks: set = set()
 
 GLOBAL_SESSION_ID = os.getenv("GLOBAL_SESSION_ID", "global")
 
@@ -168,17 +169,17 @@ async def validate_session(code: str, response: Response):
     return {"valid": True}
 
 
-async def _process_and_maybe_intervene(content: str):
+async def _process_and_maybe_intervene(content: str, session_id: str):
     try:
         decision = await mediator.process_new_message(
-            discussion_id=GLOBAL_SESSION_ID,
+            discussion_id=session_id,
             new_message=content,
             window=None,
         )
         if decision.should_intervene:
             event_manager.post_message_to_session(
                 content=decision.response,
-                session_id=GLOBAL_SESSION_ID,
+                session_id=session_id,
             )
     except Exception as e:
         logger.error(f"Mediator error: {e}", exc_info=True)
@@ -219,7 +220,9 @@ async def send_chat_message(msg: ChatMessageRequest):
     raw = create_raw_message(content=msg.content, type="user", sender_id=msg.participant_id)
     db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
 
-    asyncio.create_task(_process_and_maybe_intervene(msg.content))
+    task = asyncio.create_task(_process_and_maybe_intervene(msg.content, session))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"status": "ok", "message_id": raw["id"]}
 
 

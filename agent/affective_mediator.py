@@ -47,8 +47,8 @@ class AffectiveMediator:
         self.name = "__mediator__"
 
         self.agent = None
-        
-        self.llm: BaseChatModel = llm.with_structured_output(ShouldInterveneDecision),
+
+        self.llm: BaseChatModel = llm
         self.summarization_llm = summarization_llm
         
         self.logger: logging.Logger = logger # TODO: add StdOut as default?
@@ -160,7 +160,7 @@ class AffectiveMediator:
 
         config = {'configurable': {'thread_id': discussion_id}}
         messages = []
-        
+
         # pull previous self notes
         prev_state = await self.agent.aget_state(config)
         notes = prev_state.values.get('notes')
@@ -178,6 +178,7 @@ class AffectiveMediator:
             input={"messages": messages},
             config=config,
         )
+        self.logger.info(f"response: {result['structured_response']}")
         return result['structured_response']
 
 
