@@ -4,7 +4,6 @@ import asyncio
 from datetime import datetime, timezone
 import os
 from typing import Any, Dict
-import uuid
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
@@ -57,7 +56,9 @@ def datetime_to_string(dt: datetime) -> str:
 
 def load_prompt(func: str) -> str:
     """Load the system prompt for the agent."""
-    with open(f"agent/prompts/{func}_prompt.txt", "r") as file:
+    from agent.prompts import PROMPT_REGISTRY
+    path_to_prompt = PROMPT_REGISTRY.get(func, "")
+    with open(path_to_prompt, "r") as file:
         prompt = file.read()
     return prompt
 
@@ -120,9 +121,39 @@ def check_required_env_vars() -> None:
         "FIREBASE_URL",
         "STUDY_ID",
         "FIREBASE_SERVICE_ACCOUNT_JSON",
-    ]  # TODO: add all
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_USERNAME",
+        "REDIS_PASSWORD",
+        "ANTHROPIC_API_KEY",
+        "DEFAULT_LLM",
+    ]
     
     missing = [var for var in required_env_vars if not os.getenv(var)]
 
     if missing != []:
         raise Exception(f"Missing environment variables: {missing}")
+
+
+def redis_key(
+    status: str = "", # 'processed', 'seen'
+    type: str = "", # 'window', 'affective_state', 'event'
+    session_id: str = "",
+    participant_id: str = "",
+    event_id: str = "",
+) -> str:
+    """
+    Create a redis-formatted string hierarchical key
+    Example:
+        >> get_redis_type(type="window", participant_id="1234", session_id="5678)
+        'window:5678:1234'
+    """
+
+    # TODO: maybe add prefix to each component to symbolize what it is (e.g., "s" for session, "p" for participant)
+    return ":".join(
+        [
+            s
+            for s in [status, type, session_id, participant_id, event_id]
+            if s != ""
+        ]
+    )

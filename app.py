@@ -1,28 +1,32 @@
 """FastAPI application for the agent and event manager"""
+import asyncio
 import os
 import secrets
 import sys
 import uvicorn
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware import Middleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel as PydanticBaseModel
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from markdown_it import MarkdownIt
 from starlette.middleware.sessions import SessionMiddleware
-from agent.utils import check_required_env_vars
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from agent.affective_mediator import AffectiveMediator
-from agent.event_manager import EventManager
 
 from dotenv import load_dotenv
 load_dotenv()
 
 # Configure logging
 import logging
+
+from agent.affective_mediator import AffectiveMediator
+from agent.base_models import AffectiveEvent
+from agent.event_manager import EventManager
+from agent.utils import check_required_env_vars
 
 
 logging.basicConfig(
@@ -39,6 +43,23 @@ redis_client = None
 checkpointer = None
 event_manager = None
 mediator = None
+_background_tasks: set = set()
+
+GLOBAL_SESSION_ID = os.getenv("GLOBAL_SESSION_ID", "global")
+
+
+class ChatMessageRequest(PydanticBaseModel):
+    participant_id: str
+    content: str
+    session_id: str | None = None
+
+class ChatJoinRequest(PydanticBaseModel):
+    participant_id: str
+    session_id: str | None = None
+
+class ChatLeaveRequest(PydanticBaseModel):
+    participant_id: str
+    session_id: str | None = None
 
 
 # Define app middleware
@@ -54,6 +75,7 @@ middleware = [
 async def lifespan(app: FastAPI):
 
     global redis_client, checkpointer, event_manager, mediator
+    from agent.llms import primary_llm, summarization_llm   # or build them here
 
     try:
         check_required_env_vars()
@@ -63,14 +85,15 @@ async def lifespan(app: FastAPI):
 
     redis_client = redis.Redis(
         host=os.getenv('REDIS_HOST'),
-        port=os.getenv('REDIS_PORT'),
+        port=int(os.getenv('REDIS_PORT')),
         username=os.getenv('REDIS_USERNAME'),
         password=os.getenv('REDIS_PASSWORD'),
-        decode_responses=False,
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=None,
     )
     if not await redis_client.ping():
         raise ConnectionError("could not connect to Redis client")
-    
     logger.info("Connected to Redis successfully.")
     
     checkpointer = AsyncRedisSaver(
@@ -84,6 +107,8 @@ async def lifespan(app: FastAPI):
 
     mediator = AffectiveMediator(
         checkpointer=checkpointer,
+        llm=primary_llm,
+        summarization_llm=summarization_llm,
         logger=logger,
     )
 
@@ -94,7 +119,7 @@ async def lifespan(app: FastAPI):
         firebase_url=os.getenv("FIREBASE_URL"),
         service_account_str=os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON"),
     )
-    await event_manager.start()
+    app.state.event_manager_task = asyncio.create_task(event_manager.start())
     logger.info("EventManager started successfully")
 
     yield
@@ -103,7 +128,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     await redis_client.aclose()
     try:
-        event_manager.stop()
+        app.state.event_manager_task.cancel()
         logger.info("EventManager stopped successfully")
     except Exception as e:
         logger.error(f"Error stopping EventManager: {e}", exc_info=True)
@@ -112,6 +137,19 @@ async def lifespan(app: FastAPI):
 logger.info("Initializing AffectiveMediator application...")
 
 app = FastAPI(middleware=middleware, lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=[
+    "https://affect-aware-ai-mediator.onrender.com",
+    "https://talktocharlie.io",
+    "https://www.talktocharlie.io",
+    "http://localhost:5173",
+], allow_methods=["*"], allow_headers=["*"])
+
+
+def _valid_sessions() -> set[str]:
+    extra = os.getenv("VALID_SESSIONS", "")
+    sessions = {s.strip() for s in extra.split(",") if s.strip()}
+    sessions.add(GLOBAL_SESSION_ID)
+    return sessions
 
 
 # Health check endpoints
@@ -119,11 +157,102 @@ app = FastAPI(middleware=middleware, lifespan=lifespan)
 async def health_check():
     return {
         "status": "healthy",
-        "event_manager": "running" if event_manager._listener else "stopped"
+        "event_manager": "running" if event_manager else "stopped"
     }
 
-@app.get("/", response_class=HTMLResponse)
+
+@app.get("/session/{code}", status_code=status.HTTP_200_OK)
+async def validate_session(code: str, response: Response):
+    if code not in _valid_sessions():
+        response.status_code = status.HTTP_404_NOT_FOUND
+        return {"valid": False}
+    return {"valid": True}
+
+
+async def _process_and_maybe_intervene(content: str, session_id: str):
+    try:
+        decision = await mediator.process_new_message(
+            discussion_id=session_id,
+            new_message=content,
+            window=None,
+        )
+        if decision.should_intervene:
+            event_manager.post_message_to_session(
+                content=decision.response,
+                session_id=session_id,
+            )
+    except Exception as e:
+        logger.error(f"Mediator error: {e}", exc_info=True)
+
+
+@app.post("/chat/join", status_code=status.HTTP_201_CREATED)
+async def user_joined(msg: ChatJoinRequest):
+    from firebase_admin import db
+    from agent.utils import create_raw_message
+
+    session = msg.session_id or GLOBAL_SESSION_ID
+    raw = create_raw_message(content=msg.participant_id, type="join", sender_id=msg.participant_id)
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
+    return {"status": "ok"}
+
+
+@app.post("/chat/leave", status_code=status.HTTP_200_OK)
+async def user_left(request: Request):
+    import json
+    from firebase_admin import db
+    from agent.utils import create_raw_message
+
+    data = json.loads(await request.body())
+    participant_id = data.get("participant_id", "")
+    session = data.get("session_id") or GLOBAL_SESSION_ID
+    raw = create_raw_message(content=participant_id, type="leave", sender_id=participant_id)
+    logger.info(f"Leave event: participant={participant_id!r}, session={session!r}, stored type={raw['type']!r}")
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
+    return {"status": "ok"}
+
+
+@app.post("/chat/message", status_code=status.HTTP_201_CREATED)
+async def send_chat_message(msg: ChatMessageRequest):
+    from firebase_admin import db
+    from agent.utils import create_raw_message
+
+    session = msg.session_id or GLOBAL_SESSION_ID
+    raw = create_raw_message(content=msg.content, type="user", sender_id=msg.participant_id)
+    db.reference(f"{os.getenv('STUDY_ID')}/states/{session}/chat/messages/{raw['id']}").set(raw)
+
+    task = asyncio.create_task(_process_and_maybe_intervene(msg.content, session))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return {"status": "ok", "message_id": raw["id"]}
+
+
+@app.post("/event", status_code=status.HTTP_201_CREATED)
+async def process_new_event(event: AffectiveEvent, response: Response):
+    """
+    Enqueue incoming event, ensuring idempotency.
+    """
+    
+    # 1. idempotency check
+    idempotency_key = event.event_id
+
+    if not await redis_client.set(f"seen:{idempotency_key}", "1", ex=360, nx=True):
+        # key already exists
+        response.status_code = status.HTTP_200_OK
+        return {"status": "accepted", "duplicate": True}
+
+    # 3. enqueue
+    await redis_client.publish(channel="events", message=event.model_dump_json())
+
+    return {"status": "accepted", "event_id": idempotency_key}
+
+@app.get("/")
 async def index():
+    return "hello"
+
+
+
+@app.get("/about", response_class=HTMLResponse)
+async def about():
     """Display the agent context and flow documentation."""
     md_file_path = os.path.join(os.path.dirname(__file__), "README.md")
     try:

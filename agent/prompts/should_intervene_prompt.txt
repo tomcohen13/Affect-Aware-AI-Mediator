@@ -34,9 +34,9 @@ Reason: There is escalating tension in the group that is derailing the conversat
 Example intervention:
 User: @CHARLIE What do you think about this? [in reference to previous messages]
 OR:
-User: @CHARLIE Please help us! [in reference to previous messages]
+User: @charlie Please help us! [in reference to previous messages]
 
-Reason: A user references @CHARLIE with a request or message attached to it so you can help it.
+Reason: A user references @CHARLIE or @charlie with a request or message attached to it so you can help it.
 
 IF NEEDED:
 
@@ -56,7 +56,8 @@ Draft a message under 2 sentences.
 Construct and return the JSON object:
 
 {{
-  "should_intervene": boolean, // Whether an intervention is needed or not
-  "intervention_message": "string", // The intervention message to be sent, if applicable (empty string if false)
-  "reason": "string" // Optional reason why an intervention is needed
+  "should_intervene": bool, # Whether an intervention is needed or not
+  "in_response_to": str, # a specific message or user you wish to respond to, if applicable
+  "response": str, # The message to be sent, if applicable (empty string if false)
+  "notes": str  # if non-intervention, write short note for future self to monitor
 }}
