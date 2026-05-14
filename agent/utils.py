@@ -125,7 +125,7 @@ def check_required_env_vars() -> None:
         "REDIS_PORT",
         "REDIS_USERNAME",
         "REDIS_PASSWORD",
-        "OPENROUTER_API_KEY",
+        "ANTHROPIC_API_KEY",
         "DEFAULT_LLM",
     ]
     
